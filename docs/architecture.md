@@ -299,6 +299,8 @@ the sidebar.
 ## 7. Application state on disk
 
 `~/Library/Application Support/medd/`, resolved through Tauri's path API rather than hardcoded.
+The bundle identifier is `com.micned.medd`, and the bundle targets are `app` and `dmg` only,
+matching the macOS-only scope (D-10).
 Two files, deliberately separate:
 
 **`settings.json` — the user's, human-editable.** Autosave delay, theme preference, font size.

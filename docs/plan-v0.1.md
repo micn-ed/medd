@@ -117,6 +117,13 @@ failure mode this increment is sized to avoid.
   what makes loose files (D-15) render correctly. Rewritten `src` uses Tauri's asset protocol,
   scoped to the workspace root plus the directories of open loose documents.
 - Re-render on a debounce, not per keystroke.
+- **Set a real CSP.** The skeleton left `"csp": null` in `tauri.conf.json`, which is the
+  scaffolder's default and fine for an app that renders nothing. It stops being fine here: this is
+  the increment that starts putting user-authored HTML into the DOM and serving images over the
+  asset protocol. CSP and DOMPurify are separate layers and medd should have both — DOMPurify
+  decides what HTML survives, CSP decides what the page may do if something slips through. Scope
+  the asset protocol to the workspace root and the directories of open loose documents, nothing
+  wider.
 
 **Tests — golden files.** A corpus of `.md` inputs with expected HTML fragments covering tables,
 task lists, footnotes, strikethrough, fenced code, images, nested emphasis, and each of the four
@@ -263,6 +270,10 @@ enter one.
 - **Cold start** re-measured against the increment-1 baseline; confirm N-2.
 - **Manual pass:** window focus on second launch (checked, not asserted); WKWebView clipboard and
   IME; macOS keybindings; reading typography in both themes.
+- **Restore debug symbols for release diagnosis, or decide not to.** The skeleton set
+  `strip = true` in the release profile, which makes a panic backtrace useless. That is the right
+  setting for a shipped binary and the wrong one for a product still being hardened; revisit it
+  here rather than discovering it while reading an unreadable crash.
 - Update `docs/` with anything the implementation taught us that the design got wrong. The design
   documents are not sacred — they are the current best understanding, and increment 12 is when
   that understanding is most improved.
