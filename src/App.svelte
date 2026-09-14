@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
   import { Tree } from './tree'
+  import { Editor } from './editor'
 
   interface WorkspaceInfo {
     root: string
@@ -18,6 +19,7 @@
 
   let openPath = $state<string | null>(null)
   let openContent = $state('')
+  let currentText = $state('')
   let error = $state('')
 
   function formatError(e: unknown): string {
@@ -52,9 +54,14 @@
       const result = await invoke<ReadResult>('document_read', { path })
       openPath = path
       openContent = result.content
+      currentText = result.content
     } catch (e) {
       error = formatError(e)
     }
+  }
+
+  function handleChange(text: string) {
+    currentText = text
   }
 </script>
 
@@ -81,7 +88,11 @@
         <p class="error">{error}</p>
       {:else if openPath}
         <p class="path">{openPath}</p>
-        <pre>{openContent}</pre>
+        <div class="editor-pane">
+          {#key openPath}
+            <Editor value={openContent} onChange={handleChange} />
+          {/key}
+        </div>
       {:else if workspaceRoot}
         <p class="hint">Click a Markdown file in the sidebar to view it.</p>
       {:else}
@@ -128,7 +139,9 @@
 
   .content {
     flex: 1;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     padding: 1rem;
   }
 
@@ -137,12 +150,12 @@
     font-size: 0.85em;
     opacity: 0.7;
     margin: 0 0 0.75rem;
+    flex-shrink: 0;
   }
 
-  .content pre {
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    font-family: ui-monospace, monospace;
+  .editor-pane {
+    flex: 1;
+    min-height: 0;
   }
 
   .hint {

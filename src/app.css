@@ -1,5 +1,38 @@
 :root {
   color-scheme: light dark;
+
+  --border: #d8d8d8;
+  --error: #c0392b;
+
+  --editor-bg: #ffffff;
+  --editor-fg: #1a1a1a;
+  --editor-cursor: #1a1a1a;
+  --editor-selection: #b4d8fe;
+  --editor-heading: #0b5fa5;
+  --editor-link: #0b5fa5;
+  --editor-code-bg: rgba(0, 0, 0, 0.06);
+  --editor-code-fg: #b5563c;
+  --editor-quote: #6b6375;
+  --editor-markup: #8a8a8a;
+  --editor-comment: #8a8a8a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --border: #3a3a3a;
+
+    --editor-bg: #1e1e1e;
+    --editor-fg: #e6e6e6;
+    --editor-cursor: #e6e6e6;
+    --editor-selection: #3a5f8a;
+    --editor-heading: #6fb0e8;
+    --editor-link: #6fb0e8;
+    --editor-code-bg: rgba(255, 255, 255, 0.08);
+    --editor-code-fg: #e5987a;
+    --editor-quote: #a39aad;
+    --editor-markup: #8a8a8a;
+    --editor-comment: #8a8a8a;
+  }
 }
 
 body {
