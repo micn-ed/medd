@@ -168,8 +168,14 @@ escape hatch (comrak) a measurable change rather than a leap of faith.
 **Goal.** Make it worth reading in. This is product work, not polish — D-3's reading mode exists
 because reading is the dominant use, and R-7 asks for a published page rather than an HTML dump.
 
-- One preview stylesheet, shared by split view and reading mode: measure, vertical rhythm,
-  heading scale, table borders, blockquote treatment, code-block treatment, list spacing.
+- One preview stylesheet, shared by split view and reading mode: vertical rhythm, heading scale,
+  table borders, blockquote treatment, code-block treatment, list spacing.
+- **Measure is the one mode-conditional rule, deliberately.** Reading mode caps at a centred
+  ~70ch column, which is where R-7's "published page" is actually cashed in. Split view's preview
+  fills its pane uncapped: most split panes are already narrower than that cap, and on a wide
+  window imposing it would leave dead margins in a pane the user chose to *share* with an editor
+  rather than dedicate to reading. Keep the exception explicit in a comment — read cold it looks
+  like an inconsistency to tidy away, and tidying it away would make both modes worse.
 - Light and dark, both designed rather than inverted.
 - Reading mode: editor hidden, document full-width, sidebar collapsible away to nothing (E-3).
 - Mode toggle: split / reading / source-only, per tab (E-4).
@@ -180,6 +186,17 @@ This one is judged by eye, and that is correct.
 ---
 
 ## 7 — Autosave and external change
+
+> **Ordering note.** This increment runs *after* increment 8, not before it. Autosave, derived
+> dirty state and the D-11 conflict machinery are all per-document; building them against a
+> single-document assumption would mean restructuring the most dangerous code in the frontend
+> after it had been tested, which is how bugs get into code everyone believes is covered. The
+> original ordering was right that dangerous code should land early and land tested, and wrong
+> about how to achieve it. Tabs first, then this written once in the shape it will ship in.
+>
+> **Gate:** the WKWebView input pass — clipboard, IME, Cmd-keys, undo/redo under real typing —
+> must happen before this increment starts. Everywhere else an input bug is cosmetic; here it is
+> data loss.
 
 **Goal.** The second dangerous increment. Ship it with the same discipline as increment 2.
 
