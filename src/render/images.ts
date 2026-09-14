@@ -20,6 +20,9 @@ export function imageResolution(md: MarkdownItInstance): void {
       // http(s) sources are left untouched and simply won't load: the CSP's img-src doesn't
       // permit them, by design (N-6, plan-v0.1.md §5) — a broken-image icon is the correct,
       // honest signal for a local-first, offline app, not something to special-case around.
+      // data: sources are also left untouched, but for the opposite reason — they carry their
+      // own bytes, work fine offline, and the CSP's img-src explicitly allows `data:` for
+      // exactly this case, so there's nothing to resolve or rewrite.
       if (!HTTP_URL.test(original) && !original.startsWith('data:')) {
         const resolved = resolveRelativePath(env.documentDir, original)
         token.attrSet('src', convertFileSrc(resolved))

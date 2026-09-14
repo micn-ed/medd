@@ -88,6 +88,11 @@ describe('images resolved against the document directory (R-4, D-15)', () => {
     const html = renderMarkdown('![alt](https://example.com/pic.png)\n', workspace)
     expect(html).toContain('src="https://example.com/pic.png"')
   })
+
+  test('a data: image source is left untouched and comes through unrewritten', () => {
+    const html = renderMarkdown('![alt](data:image/png;base64,AAAA)\n', workspace)
+    expect(html).toContain('src="data:image/png;base64,AAAA"')
+  })
 })
 
 describe('nested emphasis', () => {
