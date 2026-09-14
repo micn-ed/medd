@@ -62,6 +62,23 @@ This is not licence to let CM6 types leak. Autosave, external-change detection, 
 to plain text and a derived dirty flag, never to `Transaction` or `EditorState` — ordinary layering,
 which happens to also keep the door ajar.
 
+## Implementation note — avoid the `markdown()` convenience wrapper
+
+Measured during increment 4, and worth recording because the cost is invisible from the import
+site. `@codemirror/lang-markdown`'s top-level `markdown()` helper enables embedded-HTML support by
+pulling in `@codemirror/lang-html`, which in turn bundles the **complete** `lang-css` and
+`lang-javascript` grammars unconditionally — there is no configuration flag that turns this off.
+That lands the editor at ~196 kB gzipped, above this ADR's own upper estimate.
+
+medd's source pane has no use for any of it: the preview renders HTML through markdown-it
+(ADR-001), never through CodeMirror. Importing the same package's lower-level `markdownLanguage`
+and `markdownKeymap` exports directly, rather than the wrapper, keeps GFM-aware parsing and
+list-continuation behaviour and drops the three unused grammars entirely — confirmed by inspecting
+the built bundle's module graph, not by reading the byte count and assuming.
+
+**Measured: 124.16 kB gzipped**, a 109.5 kB delta over the pre-CodeMirror baseline — inside this
+ADR's 100–200 kB estimate, near the low end.
+
 ## Consequences
 
 - Real ramp-up time on CM6's extension model must appear in the v0.1 plan as its own line item.
@@ -70,3 +87,12 @@ which happens to also keep the door ajar.
   behaviour.
 - The bundle-size figures above vary by source and by which packages are counted; they should be
   re-measured against medd's actual bundle rather than trusted as load-bearing numbers.
+  **Done — see the implementation note above.** The estimate held, but only after routing around
+  a default that would have broken it.
+- The macOS keymap arrived as `defaultKeymap` plus **zero** overrides: `@codemirror/commands`
+  already carries mac-conditional bindings matching real editor conventions (Cmd-arrows for line
+  and document boundaries, Option-arrows for word groups, Cmd/Option-Backspace, Cmd-Z/Cmd-Shift-Z).
+  ADR text anticipating "targeted overrides" was pessimistic. `indentWithTab` is the one
+  deliberate addition — CodeMirror leaves it off by default because it traps Tab out of focus
+  cycling, which is the right default for a code editor embedded in a web page and the wrong one
+  for an application whose whole purpose is writing Markdown lists.
