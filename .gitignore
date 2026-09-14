@@ -1,0 +1,21 @@
+# Rust
+/target
+**/target
+Cargo.lock.orig
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# macOS
+.DS_Store
+*.swp
+
+# medd's own atomic-write temporaries
+.medd-*.tmp
