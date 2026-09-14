@@ -1,43 +1,25 @@
 <script lang="ts">
-  // Creates one EditorView on mount and never reconfigures it from prop changes after that —
-  // CM6 is imperative and fights a reactive framework that tries to keep re-diffing it. The
-  // parent is expected to force a fresh instance for a different document by keying this
-  // component on document identity, e.g. `{#key path}<Editor value={content} {onChange} />`.
+  // Mounts an EditorView around an *existing* EditorState and destroys the view on unmount —
+  // it does not create or own the state itself (see extensions.ts / tabs.svelte.ts). That's what
+  // makes remounting safe: the parent forces a fresh EditorView per active tab via
+  // `{#key activePath}`, and because the state this view is built from lives in tabs/'s
+  // retention map rather than being constructed fresh here, undo history and content survive
+  // the destroy/recreate cycle a tab switch causes (plan-v0.1.md increment 8).
   //
-  // The seam that matters (architecture.md §2, D-12): this component's only public surface is
-  // plain text in, plain text out via `onChange`. No `Transaction`, `EditorState`, or `ViewPlugin`
-  // crosses this boundary — the rest of the app never needs to know CM6 exists.
+  // The seam that matters (architecture.md §2, D-12) still holds: `EditorState` is a CM6 type,
+  // and this component and tabs.svelte.ts are the only two places allowed to know that — the
+  // update callback baked into the state (extensions.ts) is what lets everything downstream
+  // (App.svelte, the render pipeline, autosave when it lands) deal in plain text only.
   import { onMount, onDestroy } from 'svelte'
-  import { EditorState } from '@codemirror/state'
   import { EditorView } from '@codemirror/view'
-  import { history } from '@codemirror/commands'
-  import { search } from '@codemirror/search'
-  import { editorKeymap } from './keymap'
-  import { markdownTheme } from './theme'
-  import { markdownSupport } from './language'
+  import type { EditorState } from '@codemirror/state'
 
-  let { value, onChange }: { value: string; onChange: (text: string) => void } = $props()
+  let { state }: { state: EditorState } = $props()
 
   let container: HTMLDivElement
   let view: EditorView | undefined
 
   onMount(() => {
-    const state = EditorState.create({
-      doc: value,
-      extensions: [
-        markdownSupport,
-        history(),
-        search(),
-        editorKeymap,
-        markdownTheme,
-        EditorView.lineWrapping,
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            onChange(update.state.doc.toString())
-          }
-        }),
-      ],
-    })
     view = new EditorView({ state, parent: container })
     view.focus()
   })

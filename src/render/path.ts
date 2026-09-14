@@ -44,3 +44,9 @@ export function dirname(path: string): string {
   if (idx <= 0) return '/'
   return path.slice(0, idx)
 }
+
+/** The final path segment. */
+export function basename(path: string): string {
+  const idx = path.lastIndexOf('/')
+  return idx < 0 ? path : path.slice(idx + 1)
+}

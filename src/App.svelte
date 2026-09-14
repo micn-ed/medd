@@ -3,6 +3,18 @@
   import { Tree } from './tree'
   import { Editor } from './editor'
   import { Preview, dirname } from './render'
+  import {
+    TabBar,
+    allTabs,
+    activeTab,
+    activeTabPath,
+    editorStateFor,
+    openTab,
+    closeTab,
+    closeAllTabs,
+    setActiveTab,
+    setActiveTabViewMode,
+  } from './tabs'
 
   interface WorkspaceInfo {
     root: string
@@ -14,30 +26,13 @@
     hash: string
   }
 
-  type ViewMode = 'split' | 'reading' | 'source'
-
   let workspaceRoot = $state<string | null>(null)
   let workspaceName = $state('')
   let sidebarCollapsed = $state(false)
-
-  let openPath = $state<string | null>(null)
-  let openContent = $state('')
-  let currentText = $state('')
   let error = $state('')
-  // Per tab (E-4) in spirit — there's only ever one document open until increment 8 builds real
-  // tabs, so "per tab" means "reset to a sensible default each time a different document opens"
-  // rather than a map keyed by path that would sit empty until tabs exist to fill it.
-  let viewMode = $state<ViewMode>('split')
 
-  let documentDir = $derived(openPath ? dirname(openPath) : '')
-
-  function setViewMode(mode: ViewMode) {
-    viewMode = mode
-    // Reading mode's whole point is distraction-free full width (E-3) — collapsing the sidebar
-    // on entry serves that; not restoring it on exit is the less surprising default; the user's
-    // own sidebar toggle still works normally in every mode.
-    if (mode === 'reading') sidebarCollapsed = true
-  }
+  let tab = $derived(activeTab())
+  let documentDir = $derived(tab ? dirname(tab.path) : '')
 
   function formatError(e: unknown): string {
     if (e && typeof e === 'object' && 'kind' in e) {
@@ -56,10 +51,10 @@
     if (!picked) return
     try {
       const info = await invoke<WorkspaceInfo>('workspace_open', { path: picked })
+      // A new workspace's tree has no relationship to whatever was open before.
+      closeAllTabs()
       workspaceRoot = info.root
       workspaceName = info.name
-      openPath = null
-      openContent = ''
     } catch (e) {
       error = formatError(e)
     }
@@ -69,17 +64,10 @@
     error = ''
     try {
       const result = await invoke<ReadResult>('document_read', { path })
-      openPath = path
-      openContent = result.content
-      currentText = result.content
-      viewMode = 'split'
+      openTab(path, result.content, workspaceRoot)
     } catch (e) {
       error = formatError(e)
     }
-  }
-
-  function handleChange(text: string) {
-    currentText = text
   }
 </script>
 
@@ -104,49 +92,62 @@
     <main class="content">
       {#if error}
         <p class="error">{error}</p>
-      {:else if openPath}
+      {:else if tab}
+        <TabBar
+          tabs={allTabs()}
+          activePath={activeTabPath()}
+          onSelect={setActiveTab}
+          onClose={closeTab}
+        />
+
         <div class="toolbar">
-          <p class="path">{openPath}</p>
+          <p class="path">{tab.path}</p>
           <div class="mode-toggle">
             <button
-              class:active={viewMode === 'source'}
-              onclick={() => setViewMode('source')}
+              class:active={tab.viewMode === 'source'}
+              onclick={() => setActiveTabViewMode('source')}
             >
               Source
             </button>
-            <button class:active={viewMode === 'split'} onclick={() => setViewMode('split')}>
+            <button
+              class:active={tab.viewMode === 'split'}
+              onclick={() => setActiveTabViewMode('split')}
+            >
               Split
             </button>
             <button
-              class:active={viewMode === 'reading'}
-              onclick={() => setViewMode('reading')}
+              class:active={tab.viewMode === 'reading'}
+              onclick={() => {
+                setActiveTabViewMode('reading')
+                sidebarCollapsed = true
+              }}
             >
               Reading
             </button>
           </div>
         </div>
 
-        {#if viewMode === 'split'}
+        {#if tab.viewMode === 'split'}
           <div class="split">
             <div class="editor-pane">
-              {#key openPath}
-                <Editor value={openContent} onChange={handleChange} />
+              {#key tab.path}
+                <Editor state={editorStateFor(tab.path)} />
               {/key}
             </div>
             <div class="preview-pane">
-              <Preview text={currentText} {documentDir} {workspaceRoot} onOpenFile={openFile} />
+              <Preview text={tab.currentText} {documentDir} {workspaceRoot} onOpenFile={openFile} />
             </div>
           </div>
-        {:else if viewMode === 'source'}
+        {:else if tab.viewMode === 'source'}
           <div class="single-pane">
-            {#key openPath}
-              <Editor value={openContent} onChange={handleChange} />
+            {#key tab.path}
+              <Editor state={editorStateFor(tab.path)} />
             {/key}
           </div>
         {:else}
           <div class="single-pane">
             <Preview
-              text={currentText}
+              text={tab.currentText}
               {documentDir}
               {workspaceRoot}
               onOpenFile={openFile}
@@ -203,7 +204,6 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    padding: 1rem;
   }
 
   .toolbar {
@@ -212,7 +212,7 @@
     justify-content: space-between;
     gap: 1rem;
     flex-shrink: 0;
-    margin: 0 0 0.75rem;
+    padding: 0.75rem 1rem 0;
   }
 
   .content .path {
@@ -256,6 +256,7 @@
   .single-pane {
     flex: 1;
     min-height: 0;
+    padding: 0.75rem 1rem 1rem;
   }
 
   .split {
@@ -277,9 +278,11 @@
 
   .hint {
     opacity: 0.6;
+    padding: 1rem;
   }
 
   .error {
     color: var(--error, #c0392b);
+    padding: 1rem;
   }
 </style>

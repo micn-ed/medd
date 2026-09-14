@@ -75,12 +75,14 @@
   .preview {
     height: 100%;
     overflow-y: auto;
-    padding: 0 1rem;
   }
 
-  .preview.reading {
-    /* preview.css's max-width: 70ch handles the measure; this just lets it actually centre
-       within whatever full-width space reading mode gives the pane. */
-    padding: 0;
+  /* Split view's own padding, scoped to non-reading mode via :not() rather than overridden by a
+     competing .reading rule: a scoped Svelte selector (.preview.reading.svelte-hash) is *more*
+     specific than preview.css's global .preview.reading, so a second declaration here would have
+     silently won and zeroed out preview.css's actual reading-mode padding (2.5rem/1.5rem/5rem)
+     every time — found while touching this file for increment 8, not introduced by it. */
+  .preview:not(.reading) {
+    padding: 0 1rem;
   }
 </style>
