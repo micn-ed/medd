@@ -31,14 +31,17 @@ impl ContentHash {
 /// Tracks, for every document medd has read or written, the hash of its content as medd last
 /// saw it on disk — keyed by canonical path, guarded by a single mutex.
 ///
-/// The mutex is held for the full duration of a `write()` — CAS check, disk write, and hash
-/// bookkeeping — not acquired per-field. That serialises all reads and writes across every open
-/// document, not just concurrent writers of the same path. For v0.1's handful of tabs and
-/// kilobyte-scale Markdown files that's an unmeasurable cost, and it's what makes "the new hash
-/// is recorded before the lock is released" trivially true rather than something a per-path lock
-/// table would have to go out of its way to guarantee. Worth revisiting if increment 8's tabs or
-/// increment 12's large-file work ever make a single fsync a perceptible stall for an unrelated
-/// tab.
+/// The mutex is held for the full duration of both `read()` and `write()` — including the disk
+/// I/O, not just the map bookkeeping — not acquired per-field. That serialises all reads and
+/// writes across every open document, not just concurrent access to the same path. For v0.1's
+/// handful of tabs and kilobyte-scale Markdown files that's an unmeasurable cost, and it's what
+/// makes "the new hash is recorded before the lock is released" trivially true rather than
+/// something a per-path lock table would have to go out of its way to guarantee. It is also load-
+/// bearing for `read()`: taking the lock only around the final insert would let a concurrent
+/// `write()`'s newer hash be clobbered by a `read()` that already had the older bytes in hand —
+/// see the `read`/`write` race test below, which fails reliably without the full-duration lock.
+/// Worth revisiting if increment 8's tabs or increment 12's large-file work ever make a single
+/// fsync a perceptible stall for an unrelated tab.
 pub struct DocumentStore {
     last_known: Mutex<HashMap<PathBuf, ContentHash>>,
 }
@@ -52,17 +55,20 @@ impl DocumentStore {
 
     /// Reads `path`, resolving symlinks first so the tracked key is always the real file
     /// (architecture.md §4: paths crossing the boundary are canonical). Begins tracking it.
+    ///
+    /// The lock is held across the disk read itself, not just the final insert: taking it only
+    /// at the end would let a concurrent `write()` commit a newer hash that this read then
+    /// clobbers with the older one it already had in hand, leaving `last_known` disagreeing with
+    /// disk (architecture.md §3).
     pub fn read(&self, path: &Path) -> Result<(String, ContentHash), MeddError> {
         let canonical = canonicalize(path)?;
+        let mut last_known = self.last_known.lock().unwrap();
         let bytes = fs::read(&canonical).map_err(|e| io_err(&canonical, e))?;
         let content = String::from_utf8(bytes).map_err(|_| MeddError::NotUtf8 {
             path: canonical.clone(),
         })?;
         let hash = ContentHash::of(content.as_bytes());
-        self.last_known
-            .lock()
-            .unwrap()
-            .insert(canonical, hash.clone());
+        last_known.insert(canonical, hash.clone());
         Ok((content, hash))
     }
 
@@ -162,6 +168,8 @@ fn stage_temp_file(tmp_path: &Path, content: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+    use std::thread;
     use tempfile::tempdir;
 
     fn leftover_temp_files(dir: &Path) -> Vec<PathBuf> {
@@ -339,5 +347,50 @@ mod tests {
             .is_symlink());
         assert!(leftover_temp_files(real_dir.path()).is_empty());
         assert!(leftover_temp_files(link_dir.path()).is_empty());
+    }
+
+    /// A `read()` racing a `write()` must never leave `last_known` disagreeing with disk: a
+    /// `read()` that took its unlocked bytes before the `write()` landed, but only acquires the
+    /// lock afterwards, would overwrite the write's fresh hash with its own stale one. Repeated
+    /// 400 times, fresh state each time, because this is a timing-dependent interleaving rather
+    /// than something a single run can prove absent — with the lock covering the whole read this
+    /// passes reliably; without it, it fails on close to every iteration.
+    #[test]
+    fn concurrent_read_and_write_keep_last_known_consistent_with_disk() {
+        for i in 0..400 {
+            let dir = tempdir().unwrap();
+            let target = dir.path().join("note.md");
+            fs::write(&target, "v1").unwrap();
+
+            let store = Arc::new(DocumentStore::new());
+            let (_, hash1) = store.read(&target).unwrap();
+            let canonical = target.canonicalize().unwrap();
+
+            let reader = {
+                let store = Arc::clone(&store);
+                let target = target.clone();
+                thread::spawn(move || {
+                    let _ = store.read(&target);
+                })
+            };
+            let writer = {
+                let store = Arc::clone(&store);
+                let target = target.clone();
+                thread::spawn(move || {
+                    store.write(&target, "v2", &hash1).unwrap();
+                })
+            };
+
+            reader.join().unwrap();
+            writer.join().unwrap();
+
+            let on_disk_hash = ContentHash::of(fs::read(&target).unwrap().as_slice());
+            let tracked = store.last_known.lock().unwrap().get(&canonical).cloned();
+            assert_eq!(
+                tracked,
+                Some(on_disk_hash),
+                "iteration {i}: last_known disagrees with what's actually on disk"
+            );
+        }
     }
 }
