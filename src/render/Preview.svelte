@@ -10,11 +10,13 @@
     documentDir,
     workspaceRoot,
     onOpenFile,
+    reading = false,
   }: {
     text: string
     documentDir: string
     workspaceRoot: string | null
     onOpenFile: (path: string) => void
+    reading?: boolean
   } = $props()
 
   const DEBOUNCE_MS = 200
@@ -65,7 +67,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="preview" bind:this={container} onclick={handleClick}>
+<div class="preview" class:reading bind:this={container} onclick={handleClick}>
   {@html html}
 </div>
 
@@ -74,5 +76,11 @@
     height: 100%;
     overflow-y: auto;
     padding: 0 1rem;
+  }
+
+  .preview.reading {
+    /* preview.css's max-width: 70ch handles the measure; this just lets it actually centre
+       within whatever full-width space reading mode gives the pane. */
+    padding: 0;
   }
 </style>

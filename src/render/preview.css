@@ -1,11 +1,42 @@
-/* Minimal, functional styling for rendered Markdown — legible in both themes, not the designed
-   typography pass increment 6 owns. Global (not a Svelte <style> block) because content inserted
-   via {@html} isn't covered by Svelte's per-component style scoping. */
+/* Preview typography (plan-v0.1.md increment 6) — measure, vertical rhythm, heading scale,
+   table/code/blockquote treatment, designed for both themes rather than one inverted into the
+   other. Global (not a Svelte <style> block) because content inserted via {@html} isn't covered
+   by Svelte's per-component style scoping.
+
+   Split view and reading mode share every rule here except measure and base size: reading mode
+   (.preview.reading) is where R-7's "looks like a published page" is actually cashed in (D-3) —
+   a comfortable ~70-character column, centred, in a reading face, at a size meant for sustained
+   reading rather than quick reference beside an editor. Constraining split view's preview to the
+   same measure would leave it either doing nothing (most split panes are already narrower than
+   70ch) or wasting space with dead margins on a wide window — worse than just filling the pane
+   it was given. */
 
 .preview {
   color: var(--preview-fg);
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.preview.reading {
+  font-family: ui-serif, Georgia, 'Times New Roman', serif;
+  font-size: 17px;
+  max-width: 70ch;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 5rem;
+}
+
+.preview > :first-child {
+  margin-top: 0;
+}
+
+.preview p,
+.preview ul,
+.preview ol,
+.preview pre,
+.preview blockquote,
+.preview table {
+  margin: 0 0 1.2em;
 }
 
 .preview h1,
@@ -15,58 +46,138 @@
 .preview h5,
 .preview h6 {
   color: var(--preview-heading);
+  font-weight: 600;
   line-height: 1.25;
+  margin: 1.6em 0 0.6em;
+}
+
+.preview h1 {
+  font-size: 2em;
+  margin-top: 0;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--preview-border);
+}
+
+.preview h2 {
+  font-size: 1.5em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--preview-border);
+}
+
+.preview h3 {
+  font-size: 1.25em;
+}
+
+.preview h4 {
+  font-size: 1.1em;
+}
+
+.preview h5,
+.preview h6 {
+  font-size: 1em;
+}
+
+.preview ul,
+.preview ol {
+  padding-left: 1.4em;
+}
+
+.preview li {
+  margin: 0.3em 0;
+}
+
+.preview li > ul,
+.preview li > ol {
+  margin: 0.3em 0 0;
+}
+
+.preview li.task-list-item {
+  list-style: none;
+  margin-left: -1.4em;
+  padding-left: 1.4em;
+}
+
+.preview li.task-list-item input[type='checkbox'] {
+  margin-right: 0.5em;
 }
 
 .preview a {
   color: var(--preview-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.preview blockquote {
+  padding: 0.1em 0 0.1em 1rem;
+  border-left: 3px solid var(--preview-border);
+  color: var(--preview-blockquote-fg);
+}
+
+.preview blockquote > :last-child {
+  margin-bottom: 0;
 }
 
 .preview pre {
   overflow-x: auto;
-  padding: 0.75rem 1rem;
+  padding: 0.9rem 1.1rem;
   background: var(--preview-code-bg);
-  border-radius: 4px;
+  border: 1px solid var(--preview-code-border);
+  border-radius: 6px;
+  line-height: 1.5;
 }
 
 .preview code {
   font-family: ui-monospace, monospace;
-  font-size: 0.9em;
+  font-size: 0.875em;
 }
 
 .preview :not(pre) > code {
   background: var(--preview-code-bg);
-  padding: 0.1em 0.3em;
-  border-radius: 3px;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
 }
 
 .preview table {
+  display: block;
+  overflow-x: auto;
+  width: fit-content;
+  max-width: 100%;
   border-collapse: collapse;
 }
 
 .preview th,
 .preview td {
   border: 1px solid var(--preview-border);
-  padding: 0.4em 0.8em;
+  padding: 0.5em 0.9em;
+  text-align: left;
 }
 
-.preview blockquote {
-  margin-left: 0;
-  padding-left: 1rem;
-  border-left: 3px solid var(--preview-border);
-  color: var(--preview-blockquote-fg);
+.preview th {
+  background: var(--preview-table-header-bg);
+  font-weight: 600;
 }
 
-.preview li.task-list-item {
-  list-style: none;
-}
-
-.preview li.task-list-item input[type='checkbox'] {
-  margin-right: 0.4em;
+.preview hr {
+  border: none;
+  border-top: 1px solid var(--preview-hr);
+  margin: 2em 0;
 }
 
 .preview img {
   max-width: 100%;
+  display: block;
+  margin: 1.2em auto;
+}
+
+.preview .footnotes {
+  margin-top: 2em;
+  font-size: 0.85em;
+  color: var(--preview-muted);
+}
+
+.preview .footnote-ref a,
+.preview .footnote-backref {
+  text-decoration: none;
 }
 
 /* highlight.js token colours — the curated language subset from render/languages.ts. */

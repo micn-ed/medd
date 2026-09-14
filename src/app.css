@@ -16,14 +16,18 @@
   --editor-markup: #8a8a8a;
   --editor-comment: #8a8a8a;
 
-  /* Preview pane: functional and legible in both themes, not the designed pass increment 6
-     owns (typography, vertical rhythm, real reading-mode treatment). */
-  --preview-fg: #1a1a1a;
+  /* Preview pane typography (increment 6: measure, vertical rhythm, heading scale, table and
+     code-block treatment, designed for both themes rather than one inverted into the other). */
+  --preview-fg: #1d1d1f;
   --preview-heading: #111111;
   --preview-link: #0b5fa5;
   --preview-border: #d8d8d8;
-  --preview-code-bg: rgba(0, 0, 0, 0.06);
-  --preview-blockquote-fg: #6b6375;
+  --preview-code-bg: rgba(0, 0, 0, 0.05);
+  --preview-code-border: rgba(0, 0, 0, 0.08);
+  --preview-blockquote-fg: #55505c;
+  --preview-table-header-bg: rgba(0, 0, 0, 0.035);
+  --preview-hr: #d8d8d8;
+  --preview-muted: #767078;
 
   --hljs-keyword: #a626a4;
   --hljs-string: #50a14f;
@@ -53,11 +57,15 @@
     --editor-comment: #8a8a8a;
 
     --preview-fg: #e6e6e6;
-    --preview-heading: #f2f2f2;
+    --preview-heading: #f5f5f5;
     --preview-link: #6fb0e8;
     --preview-border: #3a3a3a;
-    --preview-code-bg: rgba(255, 255, 255, 0.08);
-    --preview-blockquote-fg: #a39aad;
+    --preview-code-bg: rgba(255, 255, 255, 0.06);
+    --preview-code-border: rgba(255, 255, 255, 0.1);
+    --preview-blockquote-fg: #b7afc0;
+    --preview-table-header-bg: rgba(255, 255, 255, 0.045);
+    --preview-hr: #3a3a3a;
+    --preview-muted: #9b95a1;
 
     --hljs-keyword: #c678dd;
     --hljs-string: #98c379;
