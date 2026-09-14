@@ -54,6 +54,13 @@ refresh, and above roughly 10 MB the document opens read-only with no preview. E
 in the first band. The thresholds are tunable constants and get replaced with measured values
 during v0.1. See [architecture.md §8](docs/architecture.md).
 
+**Images hosted on the web will not render.** A `![](https://…)` in a document shows a
+broken-image icon. This is deliberate: medd works fully offline (N-6) and holds a content
+security policy that permits no network origin at all, which is what stops a document being able
+to carry anything off the machine by requesting a remote resource. Images stored beside the
+document render normally, as do base64 data URIs — the restriction is specifically on fetching
+from the network.
+
 **macOS only.** Nothing in the design gratuitously prevents Linux later, and the places that are
 genuinely macOS-specific — file association, activation, the FSEvents watching strategy — are
 called out where they occur so the port is a known quantity rather than a surprise.
