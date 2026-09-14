@@ -1,10 +1,6 @@
 //! The one error type, serialisable to the frontend (architecture.md §2).
-//!
-//! Unused outside `document.rs` and its tests until increment 3 gives `commands.rs` something to
-//! return it from.
-#![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -23,6 +19,18 @@ pub enum MeddError {
         current_content: String,
         hash: ContentHash,
     },
+}
+
+impl MeddError {
+    /// Wraps a `std::io::Error` with the path it happened to, so the message the frontend can
+    /// show is meaningful rather than a bare OS error string. Shared by every module that talks
+    /// to the filesystem, so the wrapping is consistent everywhere.
+    pub fn io(path: impl AsRef<Path>, e: std::io::Error) -> Self {
+        MeddError::Io {
+            path: path.as_ref().to_path_buf(),
+            message: e.to_string(),
+        }
+    }
 }
 
 impl std::fmt::Display for MeddError {

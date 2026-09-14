@@ -1,10 +1,10 @@
 //! Read, atomic write, content hashing, compare-and-swap (architecture.md §3).
 //!
 //! This is the single most dangerous module in the product: everything in it touches a real
-//! file someone cares about. No UI calls it yet — plan-v0.1.md increment 2 is deliberately
-//! Rust-only, so nothing outside `#[cfg(test)]` calls `DocumentStore` until increment 3 wires it
-//! into `commands.rs`. The `dead_code` allow below goes away with that first caller.
-#![allow(dead_code)]
+//! file someone cares about. `read()` is wired to `document_read` in increment 3; `write()` has
+//! no caller yet (no editing or autosave until increment 7) and is `#[allow(dead_code)]` down at
+//! its own definition rather than blanket-allowed for the module, since most of the module is
+//! genuinely reachable now.
 
 use std::collections::HashMap;
 use std::fs;
@@ -63,7 +63,7 @@ impl DocumentStore {
     pub fn read(&self, path: &Path) -> Result<(String, ContentHash), MeddError> {
         let canonical = canonicalize(path)?;
         let mut last_known = self.last_known.lock().unwrap();
-        let bytes = fs::read(&canonical).map_err(|e| io_err(&canonical, e))?;
+        let bytes = fs::read(&canonical).map_err(|e| MeddError::io(&canonical, e))?;
         let content = String::from_utf8(bytes).map_err(|_| MeddError::NotUtf8 {
             path: canonical.clone(),
         })?;
@@ -75,6 +75,9 @@ impl DocumentStore {
     /// Compare-and-swap write (architecture.md §3): re-reads and re-hashes `path` first: a
     /// mismatch against `expected_hash` rejects the write with `Conflict` and touches nothing on
     /// disk. Otherwise writes atomically and records the new hash before the lock is released.
+    ///
+    /// No caller outside tests until increment 7 wires up autosave.
+    #[allow(dead_code)]
     pub fn write(
         &self,
         path: &Path,
@@ -84,7 +87,7 @@ impl DocumentStore {
         let canonical = canonicalize(path)?;
         let mut last_known = self.last_known.lock().unwrap();
 
-        let current_bytes = fs::read(&canonical).map_err(|e| io_err(&canonical, e))?;
+        let current_bytes = fs::read(&canonical).map_err(|e| MeddError::io(&canonical, e))?;
         let current_hash = ContentHash::of(&current_bytes);
         if current_hash != *expected_hash {
             return Err(MeddError::Conflict {
@@ -110,19 +113,13 @@ impl DocumentStore {
 /// directory instead means the symlink is never touched, and also avoids an `EXDEV` failure if
 /// the symlink and its target live on different filesystems.
 fn canonicalize(path: &Path) -> Result<PathBuf, MeddError> {
-    path.canonicalize().map_err(|e| io_err(path, e))
-}
-
-fn io_err(path: &Path, e: std::io::Error) -> MeddError {
-    MeddError::Io {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    }
+    path.canonicalize().map_err(|e| MeddError::io(path, e))
 }
 
 /// Writes `content` to a temp file beside `target`, fsyncs it, copies `target`'s permissions
 /// onto it, then `rename()`s it over `target`. `target` must already exist (compare-and-swap
 /// always re-reads it first) and must already be canonical — callers within this module only.
+#[allow(dead_code)]
 fn atomic_write(target: &Path, content: &[u8]) -> Result<(), MeddError> {
     let dir = target.parent().ok_or_else(|| MeddError::Io {
         path: target.to_path_buf(),
@@ -134,14 +131,14 @@ fn atomic_write(target: &Path, content: &[u8]) -> Result<(), MeddError> {
     })?;
     let tmp_path = dir.join(format!(".medd-{}.tmp", file_name.to_string_lossy()));
 
-    stage_temp_file(&tmp_path, content).map_err(|e| io_err(&tmp_path, e))?;
+    stage_temp_file(&tmp_path, content).map_err(|e| MeddError::io(&tmp_path, e))?;
 
     let outcome = (|| {
         let perms = fs::metadata(target)
-            .map_err(|e| io_err(target, e))?
+            .map_err(|e| MeddError::io(target, e))?
             .permissions();
-        fs::set_permissions(&tmp_path, perms).map_err(|e| io_err(&tmp_path, e))?;
-        fs::rename(&tmp_path, target).map_err(|e| io_err(target, e))?;
+        fs::set_permissions(&tmp_path, perms).map_err(|e| MeddError::io(&tmp_path, e))?;
+        fs::rename(&tmp_path, target).map_err(|e| MeddError::io(target, e))?;
         Ok(())
     })();
 

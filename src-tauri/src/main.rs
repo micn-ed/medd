@@ -2,6 +2,8 @@
 // (see README), but this is harmless to leave in place.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::Mutex;
+
 mod commands;
 mod document;
 mod error;
@@ -12,7 +14,15 @@ mod workspace;
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![commands::ping])
+        .plugin(tauri_plugin_dialog::init())
+        .manage(document::DocumentStore::new())
+        .manage(Mutex::new(None::<workspace::Workspace>))
+        .invoke_handler(tauri::generate_handler![
+            commands::workspace_pick,
+            commands::workspace_open,
+            commands::dir_list,
+            commands::document_read,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
