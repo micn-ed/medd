@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "harness": "vite --mode harness --port 1425 --strictPort"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
