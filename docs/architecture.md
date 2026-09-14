@@ -498,6 +498,17 @@ module:
   reload, dirty banner, Reload, Keep mine, rejected-write-becomes-conflict. This logic is small,
   stateful, and the most dangerous code in the frontend; it deserves exhaustive tests.
 
+**Verified in the browser harness (`npm run harness`):** typography, heading scale, tables, code
+blocks, the reading-vs-split measure, both themes, the tree, tabs, mode toggling — the frontend
+rendered in an ordinary browser against an in-memory fixture workspace. This exists because Tauri
+on macOS has no WebDriver (`tauri-driver` is Linux and Windows only), which left the frontend
+unverifiable by eye for six increments — during which a CSS specificity bug shipped undetected,
+and reading mode's measure ran about 40% over its intended width because `ch` is the advance width
+of the "0" glyph rather than of an average character in running prose.
+
+It proves nothing engine-specific: the harness is Blink, the app is WKWebView. A green harness says
+nothing about clipboard, IME, or native key handling — those remain hand-verified below.
+
 **Verified by hand:**
 - Window focus on a second launch — known unreliable on macOS (§5), so it is checked, not asserted.
 - macOS keybinding fidelity, IME behaviour, and clipboard inside WKWebView, which differ from a

@@ -194,9 +194,13 @@ This one is judged by eye, and that is correct.
 > original ordering was right that dangerous code should land early and land tested, and wrong
 > about how to achieve it. Tabs first, then this written once in the shape it will ship in.
 >
-> **Gate:** the WKWebView input pass — clipboard, IME, Cmd-keys, undo/redo under real typing —
-> must happen before this increment starts. Everywhere else an input bug is cosmetic; here it is
-> data loss.
+> **Gate: withdrawn, and the reasoning corrected.** This increment was briefly gated on a manual
+> WKWebView input pass, on the argument that an input bug here would be data loss rather than
+> cosmetic. That was over-cautious and the argument does not hold: an input bug produces
+> *visibly* wrong text in the editor, which autosave then writes — bad, but not silent. The
+> genuinely silent data-loss risks in this increment are the compare-and-swap, the watcher, and
+> own-write suppression, all of which are Rust-side and fully testable. The manual input pass
+> still matters and stays in increment 12, where it always belonged.
 
 **Goal.** The second dangerous increment. Ship it with the same discipline as increment 2.
 
