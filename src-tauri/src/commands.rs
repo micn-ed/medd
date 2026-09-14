@@ -11,7 +11,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::document::{ContentHash, DocumentStore};
 use crate::error::MeddError;
-use crate::workspace::{self, TreeEntry, Workspace};
+use crate::workspace::{TreeEntry, Workspace};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,9 +55,18 @@ pub fn workspace_open(
 }
 
 /// One level of the tree, lazily (plan-v0.1.md increment 3) — never walks the whole workspace.
+/// Scoped to the open workspace's root: nothing legitimate needs to list outside it.
 #[tauri::command]
-pub fn dir_list(path: PathBuf) -> Result<Vec<TreeEntry>, MeddError> {
-    workspace::dir_list(&path)
+pub fn dir_list(
+    path: PathBuf,
+    workspace: State<'_, Mutex<Option<Workspace>>>,
+) -> Result<Vec<TreeEntry>, MeddError> {
+    let guard = workspace.lock().unwrap();
+    let ws = guard.as_ref().ok_or_else(|| MeddError::Io {
+        path: path.clone(),
+        message: "no workspace open".to_string(),
+    })?;
+    ws.dir_list(&path)
 }
 
 /// Opens a document; begins tracking it for the compare-and-swap write path that lands in

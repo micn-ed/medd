@@ -72,6 +72,19 @@ impl Workspace {
             Err(_) => Ok(PathClass::Loose),
         }
     }
+
+    /// Lists one level of `path`, rejecting anything outside this workspace's root.
+    /// `document_read` still accepts an arbitrary absolute path by design — D-15's loose
+    /// documents open by path, never by being enumerated — so this doesn't close that surface
+    /// and isn't trying to. It just costs nothing to refuse listing your way to a path nothing
+    /// legitimate needs to browse to.
+    pub fn dir_list(&self, path: &Path) -> Result<Vec<TreeEntry>, MeddError> {
+        let canonical = path.canonicalize().map_err(|e| MeddError::io(path, e))?;
+        if !canonical.starts_with(&self.root) {
+            return Err(MeddError::OutsideWorkspace { path: canonical });
+        }
+        dir_list(&canonical)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -352,5 +365,53 @@ mod tests {
         fs::write(&file, "hello").unwrap();
 
         assert!(matches!(dir_list(&file), Err(MeddError::Io { .. })));
+    }
+
+    #[test]
+    fn workspace_scoped_dir_list_allows_the_root_itself() {
+        let root = tempdir().unwrap();
+        fs::write(root.path().join("note.md"), "hello").unwrap();
+
+        let ws = Workspace::open(root.path()).unwrap();
+        let entries = ws.dir_list(ws.root()).unwrap();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn workspace_scoped_dir_list_allows_a_nested_directory() {
+        let root = tempdir().unwrap();
+        let sub = root.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("nested.md"), "hello").unwrap();
+
+        let ws = Workspace::open(root.path()).unwrap();
+        let entries = ws.dir_list(&sub).unwrap();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn workspace_scoped_dir_list_rejects_a_directory_outside_root() {
+        let root = tempdir().unwrap();
+        let elsewhere = tempdir().unwrap();
+        fs::write(elsewhere.path().join("note.md"), "hello").unwrap();
+
+        let ws = Workspace::open(root.path()).unwrap();
+        let result = ws.dir_list(elsewhere.path());
+        assert!(matches!(result, Err(MeddError::OutsideWorkspace { .. })));
+    }
+
+    #[test]
+    fn workspace_scoped_dir_list_rejects_a_symlinked_directory_pointing_outside_root() {
+        let root = tempdir().unwrap();
+        let elsewhere = tempdir().unwrap();
+        fs::write(elsewhere.path().join("note.md"), "hello").unwrap();
+        // Lives directly under the workspace's own canonical root, so the raw path text alone
+        // would not reveal the escape — only resolving the symlink does.
+        let ws = Workspace::open(root.path()).unwrap();
+        let link = ws.root().join("escape");
+        std::os::unix::fs::symlink(elsewhere.path(), &link).unwrap();
+
+        let result = ws.dir_list(&link);
+        assert!(matches!(result, Err(MeddError::OutsideWorkspace { .. })));
     }
 }
