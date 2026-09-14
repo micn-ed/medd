@@ -2,6 +2,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { Tree } from './tree'
   import { Editor } from './editor'
+  import { Preview, dirname } from './render'
 
   interface WorkspaceInfo {
     root: string
@@ -21,6 +22,8 @@
   let openContent = $state('')
   let currentText = $state('')
   let error = $state('')
+
+  let documentDir = $derived(openPath ? dirname(openPath) : '')
 
   function formatError(e: unknown): string {
     if (e && typeof e === 'object' && 'kind' in e) {
@@ -88,10 +91,15 @@
         <p class="error">{error}</p>
       {:else if openPath}
         <p class="path">{openPath}</p>
-        <div class="editor-pane">
-          {#key openPath}
-            <Editor value={openContent} onChange={handleChange} />
-          {/key}
+        <div class="split">
+          <div class="editor-pane">
+            {#key openPath}
+              <Editor value={openContent} onChange={handleChange} />
+            {/key}
+          </div>
+          <div class="preview-pane">
+            <Preview text={currentText} {documentDir} {workspaceRoot} onOpenFile={openFile} />
+          </div>
         </div>
       {:else if workspaceRoot}
         <p class="hint">Click a Markdown file in the sidebar to view it.</p>
@@ -153,9 +161,23 @@
     flex-shrink: 0;
   }
 
-  .editor-pane {
+  .split {
     flex: 1;
+    display: flex;
     min-height: 0;
+    gap: 1rem;
+  }
+
+  .editor-pane,
+  .preview-pane {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .preview-pane {
+    border-left: 1px solid var(--border, #d8d8d8);
+    padding-left: 1rem;
   }
 
   .hint {

@@ -15,6 +15,7 @@ mod workspace;
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(document::DocumentStore::new())
         .manage(Mutex::new(None::<workspace::Workspace>))
         .invoke_handler(tauri::generate_handler![
@@ -22,6 +23,7 @@ fn main() {
             commands::workspace_open,
             commands::dir_list,
             commands::document_read,
+            commands::open_external,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

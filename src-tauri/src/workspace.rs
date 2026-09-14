@@ -3,10 +3,9 @@
 //! This is where the security boundary for later increments lives: `classify()` decides whether
 //! a path is inside the workspace root, outside it (a loose file, D-15), or a directory —
 //! and getting that wrong for a `..`-escape or an out-of-root symlink is exactly what would later
-//! let the render pipeline's asset protocol (increment 5) serve files it shouldn't. Nothing calls
-//! `classify()` yet — no command needs the distinction until increment 5 or increment 10's
-//! `route_open()` — so it's `#[allow(dead_code)]` down at its own definition, same pattern as
-//! `document.rs`'s `write()`.
+//! let the render pipeline's asset protocol serve files it shouldn't. `classify()` got its first
+//! real caller in increment 5: `commands::document_read` uses it to decide whether a loose
+//! document's directory needs its own asset-protocol scope.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,7 +25,6 @@ pub struct Workspace {
 /// root or not (this is the split `routing.rs` will reuse in increment 10 to decide whether an
 /// incoming path opens a tab or replaces the workspace).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum PathClass {
     /// A file inside the workspace root, carrying its path relative to that root.
     RootRelative(PathBuf),
@@ -59,7 +57,6 @@ impl Workspace {
     /// Classifies `path` against this workspace's root. Canonicalises first, so `..` segments
     /// and symlinks are resolved before the root comparison — never trust the text of the path
     /// the caller handed in.
-    #[allow(dead_code)]
     pub fn classify(&self, path: &Path) -> Result<PathClass, MeddError> {
         let canonical = path.canonicalize().map_err(|e| MeddError::io(path, e))?;
 

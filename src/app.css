@@ -15,6 +15,25 @@
   --editor-quote: #6b6375;
   --editor-markup: #8a8a8a;
   --editor-comment: #8a8a8a;
+
+  /* Preview pane: functional and legible in both themes, not the designed pass increment 6
+     owns (typography, vertical rhythm, real reading-mode treatment). */
+  --preview-fg: #1a1a1a;
+  --preview-heading: #111111;
+  --preview-link: #0b5fa5;
+  --preview-border: #d8d8d8;
+  --preview-code-bg: rgba(0, 0, 0, 0.06);
+  --preview-blockquote-fg: #6b6375;
+
+  --hljs-keyword: #a626a4;
+  --hljs-string: #50a14f;
+  --hljs-comment: #a0a1a7;
+  --hljs-number: #986801;
+  --hljs-title: #4078f2;
+  --hljs-attr: #986801;
+  --hljs-literal: #0184bc;
+  --hljs-section: #e45649;
+  --hljs-tag: #e45649;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,6 +51,23 @@
     --editor-quote: #a39aad;
     --editor-markup: #8a8a8a;
     --editor-comment: #8a8a8a;
+
+    --preview-fg: #e6e6e6;
+    --preview-heading: #f2f2f2;
+    --preview-link: #6fb0e8;
+    --preview-border: #3a3a3a;
+    --preview-code-bg: rgba(255, 255, 255, 0.08);
+    --preview-blockquote-fg: #a39aad;
+
+    --hljs-keyword: #c678dd;
+    --hljs-string: #98c379;
+    --hljs-comment: #7f848e;
+    --hljs-number: #d19a66;
+    --hljs-title: #61afef;
+    --hljs-attr: #d19a66;
+    --hljs-literal: #56b6c2;
+    --hljs-section: #e06c75;
+    --hljs-tag: #e06c75;
   }
 }
 

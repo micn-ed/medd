@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { defineConfig } from 'vite'
 
@@ -6,6 +7,12 @@ const host = process.env.TAURI_DEV_HOST
 
 export default defineConfig({
   plugins: [svelte()],
+
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.ts'],
+    setupFiles: ['src/test-setup.ts'],
+  },
 
   // Prevent Vite from obscuring Rust errors.
   clearScreen: false,

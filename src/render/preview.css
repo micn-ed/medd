@@ -1,0 +1,105 @@
+/* Minimal, functional styling for rendered Markdown — legible in both themes, not the designed
+   typography pass increment 6 owns. Global (not a Svelte <style> block) because content inserted
+   via {@html} isn't covered by Svelte's per-component style scoping. */
+
+.preview {
+  color: var(--preview-fg);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.6;
+}
+
+.preview h1,
+.preview h2,
+.preview h3,
+.preview h4,
+.preview h5,
+.preview h6 {
+  color: var(--preview-heading);
+  line-height: 1.25;
+}
+
+.preview a {
+  color: var(--preview-link);
+}
+
+.preview pre {
+  overflow-x: auto;
+  padding: 0.75rem 1rem;
+  background: var(--preview-code-bg);
+  border-radius: 4px;
+}
+
+.preview code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+.preview :not(pre) > code {
+  background: var(--preview-code-bg);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+
+.preview table {
+  border-collapse: collapse;
+}
+
+.preview th,
+.preview td {
+  border: 1px solid var(--preview-border);
+  padding: 0.4em 0.8em;
+}
+
+.preview blockquote {
+  margin-left: 0;
+  padding-left: 1rem;
+  border-left: 3px solid var(--preview-border);
+  color: var(--preview-blockquote-fg);
+}
+
+.preview li.task-list-item {
+  list-style: none;
+}
+
+.preview li.task-list-item input[type='checkbox'] {
+  margin-right: 0.4em;
+}
+
+.preview img {
+  max-width: 100%;
+}
+
+/* highlight.js token colours — the curated language subset from render/languages.ts. */
+.preview .hljs-keyword {
+  color: var(--hljs-keyword);
+}
+.preview .hljs-string {
+  color: var(--hljs-string);
+}
+.preview .hljs-comment {
+  color: var(--hljs-comment);
+  font-style: italic;
+}
+.preview .hljs-number {
+  color: var(--hljs-number);
+}
+.preview .hljs-title,
+.preview .hljs-title.function_ {
+  color: var(--hljs-title);
+}
+.preview .hljs-attr,
+.preview .hljs-attribute {
+  color: var(--hljs-attr);
+}
+.preview .hljs-literal,
+.preview .hljs-built_in {
+  color: var(--hljs-literal);
+}
+.preview .hljs-section {
+  color: var(--hljs-section);
+  font-weight: bold;
+}
+.preview .hljs-tag,
+.preview .hljs-name {
+  color: var(--hljs-tag);
+}
