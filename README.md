@@ -7,9 +7,10 @@ content renders properly, and the app stays open rather than being launched per 
 Local-first and filesystem-backed. No server, no account, no sync. The workspace is a folder on
 disk; the documents are plain `.md` files, and they stay that way.
 
-**Status: design phase.** No implementation code has been written yet. This repository currently
-contains the requirements and architecture that the implementation will be built against — that
-ordering is a deliberate process requirement, not an accident.
+**Status: implementation, v0.1 in progress.** The skeleton (increment 1 of
+[docs/plan-v0.1.md](docs/plan-v0.1.md)) is in place: a Tauri v2 window, a Svelte frontend, and one
+command proving the IPC bridge works. Nothing else works yet — no file reading, no editor, no
+preview.
 
 ## What it will do
 
