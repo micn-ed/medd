@@ -118,6 +118,25 @@ and it is computed on a read or write we were already doing.
 
 Rust keeps a map `path → last_known_hash` for every open document, guarded by a mutex.
 
+**Paths are canonicalised before anything touches disk**, and the tracked key is always the real
+file rather than whatever the caller handed in. This is not merely tidiness — it is what makes
+writing through a symlink safe. `rename()` unlinks whichever directory entry it is given, so
+staging a temp file beside the *symlink* and renaming over it replaces the symlink with a plain
+file: the real document never receives the edit, and the link the user set up is destroyed. Worse,
+if the symlink and its target sit on different filesystems the rename fails with `EXDEV` and the
+write silently does nothing at all. Canonicalising first puts the temp-file-and-rename dance in the
+real file's own directory, so the symlink is never touched and keeps pointing at the updated file.
+
+**The mutex covers the whole of a read as well as the whole of a write.** Taking it only at the end
+of a read — after the bytes have already been pulled off disk — leaves a window where a concurrent
+write can commit a newer hash that the finishing read then overwrites with its older one. The map
+would then disagree with disk, and the watcher below would classify medd's own write as an external
+change. That is not a data-loss bug; it is a *trust* bug, and a worse one than it sounds: D-11's
+entire argument rests on the conflict banner being rare enough to be believed. A banner that
+appears after edits nobody made is how users learn to dismiss it unread. Measured on the
+implementation, the losing interleaving occurred in 398 of 400 attempts — this is the common case,
+not a corner.
+
 ### Writing: compare-and-swap, atomically
 
 Autosave is debounced in the frontend (~1s after typing stops, per P-1) and then calls

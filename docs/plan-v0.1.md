@@ -11,6 +11,18 @@ else, and the fiddliest platform work lands last because nothing depends on it.
 
 Increments are sequential by default. Where two can genuinely overlap it is noted.
 
+## How increments are handed off
+
+Each increment is committed locally, reviewed, then pushed. Two conventions make that safe when
+more than one person is working the same checkout:
+
+- **The working tree belongs to whoever is mid-increment.** Reviews, documentation edits, and
+  exploratory work wait for the gap between increments, or happen in a copy outside the repo.
+- **Commit explicit paths, never `git add -A`.** A blanket add sweeps up someone else's
+  uncommitted work in progress, which at best produces a commit whose message does not describe
+  its contents, and at worst loses that work to a later reset. Check `git status` before
+  committing and stage only what you changed.
+
 ---
 
 ## 1 — Skeleton
