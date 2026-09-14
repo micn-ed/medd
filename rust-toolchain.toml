@@ -1,0 +1,8 @@
+# Pin the compiler so every build — yours, a fresh clone's, and CI's when it exists — uses the
+# same rustc. `rust-version` in src-tauri/Cargo.toml is a different thing: it declares the
+# minimum version the code needs, not the one it is built with.
+#
+# Requires rustup. A Homebrew- or system-installed cargo ignores this file entirely.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]

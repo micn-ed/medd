@@ -58,6 +58,19 @@ during v0.1. See [architecture.md §8](docs/architecture.md).
 genuinely macOS-specific — file association, activation, the FSEvents watching strategy — are
 called out where they occur so the port is a known quantity rather than a surprise.
 
+## Building
+
+Requires [rustup](https://rustup.rs) and Node. The Rust toolchain is pinned in
+[`rust-toolchain.toml`](rust-toolchain.toml) so every build uses the same compiler — a
+Homebrew- or system-installed `cargo` ignores that file, so install Rust through rustup rather
+than a package manager. Node is only ever a build-time dependency; nothing ships it.
+
+```sh
+npm install
+make dev      # run in development
+make build    # produce the .app bundle
+```
+
 ## Built with
 
 Rust and [Tauri v2](https://v2.tauri.app/) (macOS WKWebView), with CodeMirror 6 for the source
