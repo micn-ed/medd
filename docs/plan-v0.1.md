@@ -77,8 +77,17 @@ This is the single most dangerous module in the product.
   directory.
 - `dir_list(path)` returns **one level**, lazily. Do not walk the tree eagerly — a ten-thousand
   file workspace must not be enumerated before the window appears.
+- `dir_list` refuses paths outside the open workspace root. The tree has no business browsing
+  elsewhere, and D-15's loose documents explicitly leave the tree unchanged, so nothing legitimate
+  needs it. It does not close the arbitrary-read surface described in increment 5 — `document_read`
+  cannot be gated without breaking D-15 — but it does mean a caller must already know a path
+  rather than being able to enumerate its way to one.
 - Sidebar: tree UI, expand/collapse a directory, collapse the whole sidebar (W-3).
 - `.md` files are openable; other files are visible and inert (W-8).
+- **Dotfiles and `.git/` are hidden from the tree.** A Markdown workspace is nearly always a
+  project directory, and repository plumbing in the sidebar is noise while browsing documents —
+  which is how comparable tools (Obsidian, Typora, iA Writer) behave for the same reason. Not
+  configurable in v0.1; it becomes a setting when `settings.json` arrives in increment 11.
 - Clicking a file calls `document_read` and dumps the text into a `<pre>`. **No editor yet** —
   this increment is about the tree.
 
@@ -129,13 +138,23 @@ failure mode this increment is sized to avoid.
   what makes loose files (D-15) render correctly. Rewritten `src` uses Tauri's asset protocol,
   scoped to the workspace root plus the directories of open loose documents.
 - Re-render on a debounce, not per keystroke.
-- **Set a real CSP.** The skeleton left `"csp": null` in `tauri.conf.json`, which is the
-  scaffolder's default and fine for an app that renders nothing. It stops being fine here: this is
-  the increment that starts putting user-authored HTML into the DOM and serving images over the
-  asset protocol. CSP and DOMPurify are separate layers and medd should have both — DOMPurify
-  decides what HTML survives, CSP decides what the page may do if something slips through. Scope
-  the asset protocol to the workspace root and the directories of open loose documents, nothing
-  wider.
+- **Set a real CSP. This is a load-bearing security control, not hygiene.** The skeleton left
+  `"csp": null`, which is the scaffolder's default and fine for an app that renders nothing. It
+  stops being fine here, and the reason is sharper than "user HTML reaches the DOM":
+
+  `document_read` accepts an arbitrary absolute path **by design** — D-15 says a document outside
+  the workspace opens as a loose tab, so there is no path restriction that could be applied
+  without breaking a product decision. The command surface therefore legitimately exposes reading
+  any file the user can read. That is fine as long as only medd's own code can call it, which
+  means the WebView must never execute script it did not ship, and must never be able to make an
+  outbound request. DOMPurify decides what HTML survives; CSP decides what the page may do if
+  something slips past it, including whether a rendered `<img src="http://…">` can carry data off
+  the machine. Neither layer substitutes for the other, and N-6's "works fully offline" is a
+  requirement about capability, not just convenience — a page that cannot reach the network cannot
+  exfiltrate what it reads.
+
+  Scope the asset protocol to the workspace root and the directories of open loose documents,
+  nothing wider.
 
 **Tests — golden files.** A corpus of `.md` inputs with expected HTML fragments covering tables,
 task lists, footnotes, strikethrough, fenced code, images, nested emphasis, and each of the four
