@@ -491,6 +491,15 @@ mod tests {
         // symlinks, so a symlinked directory renders as a `Directory` and expands in the sidebar.
         // The walk classifies with `DirEntry::file_type()`, which does NOT, so it never descends.
         // The user sees the documents in the tree, opens them, and cannot find them in Cmd+P.
+        //
+        // WHAT THIS GUARDS AFTER THE SHARED PREDICATE LANDS, because the answer should be here
+        // rather than in a ruling document nobody re-reads. Today it catches *drift*: two
+        // mechanisms answering one question differently. Once both sides call one predicate, the
+        // only way it can fail is if someone stops calling it — a narrower failure, and a much
+        // rarer one, which is exactly why it will eventually look like a test that cannot fail and
+        // invite deletion. It can fail. That is the failure it is for, and it is the cheapest
+        // guard available against re-duplicating a question this project has now duplicated seven
+        // times. Deleting it costs nothing today and costs the eighth instance later.
         let root = Builder::new().prefix("medd-agree-").tempdir().unwrap();
         let elsewhere = Builder::new().prefix("medd-target-").tempdir().unwrap();
         std::fs::write(elsewhere.path().join("linked.md"), "# linked").unwrap();
