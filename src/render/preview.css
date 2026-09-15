@@ -5,11 +5,11 @@
 
    Split view and reading mode share every rule here except measure and base size: reading mode
    (.preview.reading) is where R-7's "looks like a published page" is actually cashed in (D-3) —
-   a comfortable ~70-character column, centred, in a reading face, at a size meant for sustained
-   reading rather than quick reference beside an editor. Constraining split view's preview to the
-   same measure would leave it either doing nothing (most split panes are already narrower than
-   70ch) or wasting space with dead margins on a wide window — worse than just filling the pane
-   it was given. */
+   a comfortable reading column, centred, in a reading face, at a size meant for sustained reading
+   rather than quick reference beside an editor. Constraining split view's preview to the same
+   measure would leave it either doing nothing (most split panes are already narrower than the
+   reading column) or wasting space with dead margins on a wide window — worse than just filling
+   the pane it was given. */
 
 .preview {
   color: var(--preview-fg);
@@ -21,7 +21,14 @@
 .preview.reading {
   font-family: ui-serif, Georgia, 'Times New Roman', serif;
   font-size: 17px;
-  max-width: 70ch;
+  /* `ch` is the advance width of the font's "0" glyph, not an average character — in this serif
+     face the zero is noticeably wider than typical running prose, so 70ch does not mean "70
+     characters". Measured directly (walking Range.getClientRects() across real wrapped lines in
+     the harness, not estimated): 70ch was landing 82+ actual characters per line, well past the
+     45-75 comfortable range. 58ch measures to ~69 actual characters on representative prose —
+     if this number is ever "corrected" back toward 70 because it looks too small for a 70-ish
+     target, remeasure first; the character count and the ch value are not the same axis. */
+  max-width: 58ch;
   margin: 0 auto;
   padding: 2.5rem 1.5rem 5rem;
 }

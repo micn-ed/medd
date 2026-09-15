@@ -102,21 +102,24 @@
 
         <div class="toolbar">
           <p class="path">{tab.path}</p>
-          <div class="mode-toggle">
+          <div class="mode-toggle" role="group" aria-label="View mode">
             <button
               class:active={tab.viewMode === 'source'}
+              aria-pressed={tab.viewMode === 'source'}
               onclick={() => setActiveTabViewMode('source')}
             >
               Source
             </button>
             <button
               class:active={tab.viewMode === 'split'}
+              aria-pressed={tab.viewMode === 'split'}
               onclick={() => setActiveTabViewMode('split')}
             >
               Split
             </button>
             <button
               class:active={tab.viewMode === 'reading'}
+              aria-pressed={tab.viewMode === 'reading'}
               onclick={() => {
                 setActiveTabViewMode('reading')
                 sidebarCollapsed = true
