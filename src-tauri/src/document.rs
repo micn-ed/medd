@@ -285,6 +285,23 @@ fn target_of_temp(name: &str) -> Option<&str> {
     (!target.is_empty()).then_some(target)
 }
 
+/// Whether `path` is one of medd's own staging files.
+///
+/// The watcher needs this: an atomic write is not a single-path event. FSEvents reports the
+/// staging file alongside the document, so without this a write of medd's own would surface as a
+/// change to something in the workspace — which is what own-write suppression exists to prevent,
+/// arriving by a path the content hash never sees, because the staging file is not a tracked
+/// document and has no hash to compare.
+///
+/// Expressed over `target_of_temp` rather than over the prefix and suffix directly, so the
+/// staging-file naming still has exactly one owner (see `TEMP_PREFIX`).
+pub fn is_staging_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .and_then(target_of_temp)
+        .is_some()
+}
+
 /// Removes abandoned staging files from `dir`, returning the paths it removed.
 ///
 /// **Invariant: a staging file is removed only if no process holds its lock, its target names a
