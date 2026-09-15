@@ -248,6 +248,37 @@ The watcher exists in v0.1 anyway because P-3 needs it.
 
 - Fuzzy filename match over the workspace, Enter to open, arrows to move, Esc to dismiss.
 - The file list is built lazily and cached; a workspace scan must not block the dialog opening.
+- **Cycle protection is by resolved-path identity, not a depth cap.** A directory symlink to an
+  ancestor — `notes/loop -> ../` — makes the walk unbounded, re-enumerating the same documents at
+  every level. `dir_list` never had to care because it descends one level, and `fs::metadata()`
+  follows links deliberately here (the dangling-symlink test depends on it). The failure mode is
+  the bad one: no crash, no error, no result, a threadpool worker spinning forever while quick-open
+  never populates — indistinguishable from a slow walk, on the one operation whose whole promise is
+  that it does not block. **A depth cap converts an infinite walk into a silently wrong one**,
+  which is worse: it stops, omits everything past the cap, and looks like a correct result.
+- **The walk copies the workspace root out of the lock and releases it before touching the
+  filesystem.** `commands.rs` holds `Mutex<Option<Workspace>>` across `dir_list` today, which is
+  safe *only* because that call returns in microseconds. An async walk holding the same lock for
+  its duration would block every sync command — and sync commands run on the main thread, so the UI
+  would freeze for the length of the walk. Exactly the outcome the async command exists to avoid,
+  reached by holding a lock the old code could hold safely. Testable directly: take the lock on
+  another thread mid-walk and confirm it is available.
+- **"Must not block the dialog opening" is two claims and needs both.** As written it has no
+  threshold and no observable, so it cannot fail — the same shape as increment 10's E2E deliverable
+  before its timing constraint was stated. The testable half: the dialog renders and accepts
+  keystrokes **while the walk promise is still pending** — assert against an *unresolved* promise,
+  since a test that awaits the walk first proves nothing about ordering. The measured half: a
+  number on a real workspace, which belongs on increment 12's list beside the large-document
+  thresholds. Whether the command carries `async` is a macro attribute and no unit test can see it.
+- **The fixture must contain what the filters exclude.** A `node_modules` exclusion test passes
+  trivially against a fixture with no `node_modules` — this project has already shipped that
+  mistake once, in a harness fixture claiming R-1…R-7 coverage with no images in it.
+- **Cache invalidation needs the half that establishes a stale result would otherwise be served**,
+  or the other half proves nothing. And invalidation **marks stale rather than re-walking**, or a
+  `cargo build` becomes a sequence of full workspace walks.
+- **Every ignore rule carries a mutant** in `scripts/mutants.sh`. A rule with no mutant is a rule
+  nothing is checking, and the harness is where that stays visible rather than depending on anyone
+  remembering.
 - Scoring can be simple. This increment is small and should stay small.
 
 ---
