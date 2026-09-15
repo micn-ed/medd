@@ -242,6 +242,37 @@ disabled control needs a visible reason, and a tooltip is not one.
 
 ---
 
+## Ask what the symptom will look like, and what people will blame
+
+Bundling related work into one change is normally right. **It stops being right when one item
+pre-loads a misdiagnosis of the other.**
+
+Two fixes were queued together here: a latent lock bug, and the new async command that would make
+it reachable. Landing them as one change would have been tidy — and the resulting symptom,
+intermittent UI stalls, would have looked exactly like the new feature being slow, which is
+precisely what everyone was already watching for. The wrong explanation would have been sitting
+there, plausible and ready. So the latent fix landed first, on its own, and any stall seen
+afterwards is genuinely attributable to the feature.
+
+The question to ask whenever a known-latent fix and a suspicious new feature are queued together:
+*what will the symptom look like, and what will people blame?* The fix is cheap now and expensive
+once it is competing with a convincing wrong answer.
+
+---
+
+## A negative claim is only worth its search
+
+"No reversed lock order found", "no other instance of this bug", "nothing else depends on that" —
+these are only worth saying if the search was exhaustive, and worth **more** when you say which it
+was. Reporting a negative from the sites you happened to be looking at reads identically to
+reporting one from every site there is.
+
+So: state the scope of the search alongside the result. *"Only these two functions take both locks,
+and both take them in the same order"* is a different claim from *"the two I looked at agreed"*,
+and only the first licenses anyone to stop worrying.
+
+---
+
 ## Authorship and acceptance are separate
 
 Whoever writes an increment writes its tests too — that is how correct code gets written, not a

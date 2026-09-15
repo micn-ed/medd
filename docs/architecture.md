@@ -116,6 +116,14 @@ actor in the system happened to be doing the right thing.
 Two constraints that are currently true by luck and should be true by rule. **Lock order is
 workspace → watcher**, consistently, so no AB/BA deadlock is waiting; say so where the second lock
 is taken, because the next person to add a lock site has nothing else telling them an order exists.
+
+That claim is checked rather than observed. Every site was enumerated: only `workspace_open` and
+`document_read` take both, both in that order; `dir_list` takes the workspace lock alone; `quit.rs`
+holds three independent mutexes, never one across another. One pair looks like a reversal and
+isn't — `run_event_loop` takes workspace → `last_known`, and `document_read` takes `last_known` →
+workspace, but **sequentially rather than nested**: `store.read()` returns and releases before the
+workspace lock is acquired. Worth recording precisely, because the next reader will see the
+apparent reversal and needs to know it was examined rather than missed.
 And note that on **edition 2021 an `if let` scrutinee temporary lives for the whole body** — which
 is why one of those guards is held at all. Edition 2024 changes that, so an edition bump would
 silently fix this *and* silently change anything else relying on scrutinee temporary lifetimes.
