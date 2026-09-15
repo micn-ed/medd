@@ -101,5 +101,20 @@ more than the finding was.
   test was running.
 - **Commit explicit paths, never `git add -A`.** A blanket add sweeps up someone else's
   uncommitted work in progress — which at best produces a commit whose message does not describe
-  its contents, and at worst loses that work to a later reset. Check `git status` before
-  committing and stage only what you changed.
+  its contents, and at worst loses that work to a later reset.
+
+- **`git add <paths>` is not enough; use `git commit -- <paths>`.** This is the sharper version of
+  the rule above, and it was learned by breaking it *after* writing it. `git commit` commits the
+  **whole index**, not the paths you just added — so if another session has already staged its
+  work, your commit takes that too, however carefully you named your own files. It happened here: a
+  commit whose message described a 24-line documentation correction contained 1,174 lines of
+  someone else's finished feature work. Nothing was lost, and the history was only honest again
+  after being split apart by hand. Naming paths on the `commit` itself bypasses the shared index
+  entirely.
+
+- **Never `stash`, `reset`, or `checkout` the shared tree to get a clean state — copy it.** Also
+  learned by doing. Running `git stash` to get an uncontaminated test read removed a colleague's
+  in-flight work from under them mid-edit; it was restored within a minute, and only because it was
+  noticed immediately. Every one of those commands is a write to a tree that belongs to whoever is
+  mid-increment. If you need a pristine checkout, copy the repository somewhere else and work
+  there — which costs seconds and cannot take anything from anyone.
