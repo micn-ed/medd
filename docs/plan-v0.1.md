@@ -293,6 +293,24 @@ Deliberately late: the fiddliest platform work, and nothing above depends on it.
   Dropping `open -a` silently drops that property unless it is deliberately restored.
 - Resolve relative paths to absolute before handing them on — the running instance's working
   directory is not the user's.
+- **Named deliverable: the end-to-end quit gesture.** The quit flush is verified at the unit level
+  and by a real Cmd+Q against an app with no dirty buffer; the path that matters — *dirty buffer,
+  real keystroke, correct bytes on disk* — is inference until this increment. It is blocked today
+  only on opening a document without clicking, because WKWebView content is not reachable through
+  the accessibility tree. The CLI removes that block: `Editor.svelte` calls `view.focus()` on
+  mount, so a document opened via `medd fixture.md` leaves the editor focused and every step after
+  is keyboard-only.
+
+  ```
+  medd fixture.md          # cold launch -> pending-open buffer -> openTab -> focus
+  keystroke "x"            # proven
+  keystroke cmd+q          # the real gesture
+  read fixture.md          # the assertion
+  ```
+
+  **Run it from a cold launch**, not against a warm instance: keystrokes need the window frontmost,
+  activation is best-effort, and a cold launch *is* frontmost. Note `openFile` is latched during
+  shutdown, so the open must complete before the quit gesture — which it naturally does.
 - `medd <nonexistent-file>` **errors**; it does not create. See architecture.md §9 for why, and
   note the error must not use a surface that replaces the tab UI.
 - `make install-cli` symlinks the shim. Homebrew is deferred.
@@ -408,6 +426,25 @@ asking the frontend to flush and exiting when it reports done. Its invariant is 
 with clause 2 vacuous: **the exit must issue everything the debounce still owes, and the outcome of
 those writes applies to nothing.** Four more, worked out ahead of the code:
 
+- **`ExitRequested` is the right hook only for exits that do not begin by destroying a window.**
+  On the window-close route it fires from `Destroyed` — *after* the window is gone from Tauri's
+  store — so an emit to the frontend reaches no webview, silently. Closing the window must be
+  intercepted one event earlier, at `RunEvent::WindowEvent { CloseRequested { api } }`, which
+  arrives while the frontend is still alive and carries `prevent_close()`. **Both routes reach the
+  same `begin_shutdown`**, rather than two handlers that each happen to call the flush.
+- **The bounded wait runs on a spawned thread, never in the handler.** Blocking in the handler
+  stops the main thread pumping, so the WebView can never deliver its "ready" signal and the JS
+  flush never runs — every quit would take the full ceiling and flush nothing, while the wait's own
+  unit tests passed.
+- **A repeat user request also prevents, and does nothing.** Having it skip the remaining wait was
+  considered and rejected: because `flushAll` cancels the debounce, a normal flush is tens of
+  milliseconds, so medd has exited before a human can press twice in essentially every real case.
+  The skip therefore fires *only* when a write is stalled — the case where the edit is most at risk
+  and truncating costs most. It also misreads the gesture: with no feedback of any kind, a second
+  press far more likely means "did that register?" than "yes, I mean it", especially in an app
+  whose whole save story is that you never think about saving. The ceiling is already the escape
+  hatch. Note this needs two conditions kept distinct — the coordinator's own completion must pass
+  through where a repeat user press must not, and one branch cannot serve both.
 - **The bound is a Rust-side timer that exits regardless of what the frontend says**; the
   frontend's "done" may only make it sooner. If the frontend is the only thing that can end the
   wait, a JS exception or an already-crashed WebView leaves medd *unquittable*, and the user's only
@@ -480,6 +517,21 @@ of currently-open documents — the worst subset.
 - **Memory soak.** Ten tabs, eight hours. The criterion is resident memory at 8h no more than 10%
   above resident memory at 5 minutes. If it fails, find the retention before shipping.
 - **Cold start** re-measured against the increment-1 baseline; confirm N-2.
+- **The quit ceiling is a budget with a named worst case, and belongs on this list.** 3s is
+  ~3× a pessimistic ten-tab flush, where the cost is **N serialised `fsync`s** — the writes contend
+  on `DocumentStore`'s single mutex — under concurrent load from `git checkout` or Spotlight. It is
+  *not* the autosave debounce: `flushAll` cancels every pending timer and issues immediately, which
+  is its whole purpose. Measure it the way the large-document thresholds are measured.
+
+  Keep it **constant, not adaptive**. Scaling with dirty-tab count is backwards: the ceiling bounds
+  the *pathological* case, and a stalled write does not scale with tab count — an adaptive bound
+  would grant the pathological case more time precisely when more tabs are open.
+
+  Recorded but not built: the ceiling bounds *total work* while the hazard is *stall*. A
+  progress-reset rule — restart the clock on each completed write — bounds the right thing: ten
+  healthy writes take as long as they need, one stalled write still times out. §8 sets no cap on
+  open tab count, so enough dirty tabs to hit a flat bound with nothing actually wrong is reachable
+  in principle. Do this if the soak test or the no-cap decision makes the flat bound bite.
 - **Manual pass:** window focus on second launch (checked, not asserted); WKWebView clipboard and
   IME; macOS keybindings; reading typography in both themes.
 - **Restore debug symbols for release diagnosis, or decide not to.** The skeleton set

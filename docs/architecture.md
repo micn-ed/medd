@@ -260,6 +260,19 @@ is what makes that true in every case rather than most of them — increment 7's
 un-scheduled version left "Keep mine" unsaved indefinitely whenever the conflict was discovered by
 a rejected compare-and-swap write, since that write had already spent the only timer in flight.
 
+**The shutdown latch is one-way, and that is safe only because nothing cancels a quit.** Once
+shutdown begins, autosave scheduling, external-change application and document opening are all
+suppressed — drain what is owed, accept no new work. There is no path back, and none is needed,
+because the latch is set only once the process is committed to exiting within a bounded time.
+
+**Whoever adds a cancellable quit must clear the latch.** If a quit can be aborted and the latch
+survives, autosave is silently off for the rest of the session — the worst-shaped bug this product
+can have. That is not hypothetical: the conflicted-tab cost recorded immediately below is exactly
+what would tempt someone into a *"you have unresolved conflicts — really quit?"* prompt, and a
+prompt implies a cancel. The dependency is recorded here rather than pre-empted with a clearing
+function nobody calls, because an abstraction whose only consumer is a hypothetical is the thing
+D-12 warns against; a note is what makes the constraint visible to whoever writes the prompt.
+
 **A conflicted tab does not flush when it is closed, or when medd quits — and this is the one
 place the product knowingly discards typed text.** The autosave path declines to write while a tab
 is in conflict, which is correct: closing a tab or quitting the app must not silently pick a side
