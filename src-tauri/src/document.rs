@@ -5,7 +5,7 @@
 //! wired to `document_write` and `check_external_change`/`is_tracked` back the watcher's own-
 //! write suppression (increment 7).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -262,6 +262,130 @@ fn canonicalize(path: &Path) -> Result<PathBuf, MeddError> {
     path.canonicalize().map_err(|e| MeddError::io(path, e))
 }
 
+/// The prefix and suffix medd's staging files are named with. Owned here, in one place, because
+/// two separate things have to agree about them: `atomic_write`, which creates them, and
+/// `sweep_abandoned_temps`, which recognises them. (The watcher will want the same recogniser when
+/// it stops folding medd's own writes into `tree:changed`.) A pattern held as a string literal in
+/// more than one place is a shape this project has already been bitten by repeatedly, so the
+/// round-trip between these two functions is pinned by a test rather than by care.
+const TEMP_PREFIX: &str = ".medd-";
+const TEMP_SUFFIX: &str = ".tmp";
+
+/// The staging file name used while writing the document called `target_file_name`.
+fn temp_file_name(target_file_name: &str) -> String {
+    format!("{TEMP_PREFIX}{target_file_name}{TEMP_SUFFIX}")
+}
+
+/// The inverse of `temp_file_name`: the document name a staging file belongs to, or `None` if
+/// `name` is not one of medd's staging files at all. An empty target (`.medd-.tmp`) is `None` —
+/// there is no document it could belong to.
+fn target_of_temp(name: &str) -> Option<&str> {
+    let target = name.strip_prefix(TEMP_PREFIX)?.strip_suffix(TEMP_SUFFIX)?;
+    (!target.is_empty()).then_some(target)
+}
+
+/// Removes abandoned staging files from `dir`, returning the paths it removed.
+///
+/// **Invariant: a staging file is removed only if no process holds its lock and its target
+/// document exists in the same directory.** Both halves are load-bearing and neither is a proxy
+/// for the other:
+///
+/// - **Nobody holds its lock.** `atomic_write` holds an exclusive advisory lock on the staging
+///   file from before it writes a byte until after the rename, so a lock that cannot be acquired
+///   means some process is mid-write *right now* — this one, or a second instance during the
+///   two-window race ADR-003 documents. The kernel releases the lock when that process dies, so
+///   "acquirable" is exactly "the writer is gone", answered directly rather than inferred from a
+///   timestamp or a process id. A recycled pid would have made us skip a file permanently; a
+///   released lock cannot.
+/// - **The target document exists.** medd's own litter always has its target present: the litter
+///   exists *because* the rename never happened, which leaves the original untouched. A staging
+///   file with no corresponding document is therefore not ours, whatever it is named, and is left
+///   alone.
+///
+/// Residual risk, stated rather than assumed away: a file a *user* happened to name
+/// `.medd-<something>.tmp`, sitting beside a file named `<something>`, would match both guards and
+/// be removed. There is no way to distinguish it, medd cannot open it (the tree hides dotfiles),
+/// and the name is specific enough that this is accepted rather than guarded further — a `.md`-only
+/// guard would be a guess about future scope that silently stops sweeping the day medd edits
+/// anything else.
+///
+/// Never fails: the write that triggered this has already succeeded, and a cleanup problem must
+/// not be reported as a write problem. An unreadable directory, or a file that will not unlink,
+/// is skipped.
+pub fn sweep_abandoned_temps(dir: &Path) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return removed;
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(target) = target_of_temp(name) else {
+            continue;
+        };
+        if !dir.join(target).exists() {
+            continue; // not medd's litter: our own always has its target present
+        }
+
+        let path = entry.path();
+        let Ok(file) = fs::File::open(&path) else {
+            continue;
+        };
+        if file.try_lock().is_err() {
+            continue; // someone is writing it right now
+        }
+        // The lock is dropped with `file` at the end of this iteration; unlinking while holding it
+        // is safe, and holding it until then is what stops a concurrent writer claiming the path
+        // between the check and the unlink.
+        if fs::remove_file(&path).is_ok() {
+            removed.push(path);
+        }
+    }
+
+    removed
+}
+
+/// Bounds `sweep_abandoned_temps` to once per directory per session.
+///
+/// The bound is sound because of what creates litter: a staging file survives only when the
+/// process writing it died, so **a live session creates no litter except by ending.** Within one
+/// run, a directory that has been swept clean stays clean, and re-scanning it on every autosave
+/// would put a `read_dir` on the write path for no possible gain — which §8's cold-start
+/// discipline says not to do.
+///
+/// Crash recovery is unaffected: the litter from a previous run is removed by the first write this
+/// run makes to that directory.
+pub struct TempSweeper {
+    swept: Mutex<HashSet<PathBuf>>,
+}
+
+impl TempSweeper {
+    pub fn new() -> Self {
+        TempSweeper {
+            swept: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Sweeps `dir` if it has not already been swept this session. Infallible by design — see
+    /// `sweep_abandoned_temps`.
+    pub fn sweep_once(&self, dir: &Path) {
+        if !self.swept.lock().unwrap().insert(dir.to_path_buf()) {
+            return;
+        }
+        for path in sweep_abandoned_temps(dir) {
+            // An editor that deletes files should be able to say which ones it deleted.
+            eprintln!("medd: removed abandoned staging file {}", path.display());
+        }
+    }
+}
+
+impl Default for TempSweeper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Writes `content` to a temp file beside `target`, fsyncs it, copies `target`'s permissions
 /// onto it, then `rename()`s it over `target`. `target` must already exist (compare-and-swap
 /// always re-reads it first) and must already be canonical — callers within this module only.
@@ -274,9 +398,14 @@ fn atomic_write(target: &Path, content: &[u8]) -> Result<(), MeddError> {
         path: target.to_path_buf(),
         message: "path has no file name".to_string(),
     })?;
-    let tmp_path = dir.join(format!(".medd-{}.tmp", file_name.to_string_lossy()));
+    let tmp_path = dir.join(temp_file_name(&file_name.to_string_lossy()));
 
-    stage_temp_file(&tmp_path, content).map_err(|e| MeddError::io(&tmp_path, e))?;
+    // `staged` is held until after the rename below, deliberately: it carries the advisory lock
+    // `sweep_abandoned_temps` tests, so releasing it earlier would open a window in which a
+    // concurrent sweep could judge this very write abandoned and unlink the file out from under
+    // the rename. It stays locked briefly over the *target* inode after the rename, which nothing
+    // else locks, so that costs nothing.
+    let staged = stage_temp_file(&tmp_path, content).map_err(|e| MeddError::io(&tmp_path, e))?;
 
     let outcome = (|| {
         let perms = fs::metadata(target)
@@ -289,9 +418,11 @@ fn atomic_write(target: &Path, content: &[u8]) -> Result<(), MeddError> {
 
     if outcome.is_err() {
         // Best-effort: don't leave litter in the workspace if a step after staging failed.
-        // The primary error is what the caller sees either way.
+        // The primary error is what the caller sees either way. Litter this *cannot* clean up —
+        // the process dying before reaching here — is what `sweep_abandoned_temps` exists for.
         let _ = fs::remove_file(&tmp_path);
     }
+    drop(staged);
     outcome
 }
 
@@ -299,11 +430,28 @@ fn atomic_write(target: &Path, content: &[u8]) -> Result<(), MeddError> {
 /// and prove the original is untouched at every point up to (but not including) the rename —
 /// which is the actual crash-safety property: `rename()` itself is atomic by the OS's own
 /// guarantee, so the only window worth testing is everything that happens before it.
-fn stage_temp_file(tmp_path: &Path, content: &[u8]) -> std::io::Result<()> {
-    let mut file = fs::File::create(tmp_path)?;
+///
+/// Returns the open handle rather than dropping it, because it holds an exclusive advisory lock on
+/// the staging file that must outlive the rename — that lock is the whole mechanism
+/// `sweep_abandoned_temps` uses to tell "being written right now" from "abandoned by a process
+/// that died".
+///
+/// The open is deliberately not `File::create`: that truncates first, so a second instance racing
+/// for the same staging path would destroy the first's in-progress content *before* discovering it
+/// could not take the lock. Opening without truncating, locking, and only then truncating means a
+/// lost race fails having touched nothing.
+fn stage_temp_file(tmp_path: &Path, content: &[u8]) -> std::io::Result<fs::File> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(tmp_path)?;
+    file.try_lock().map_err(std::io::Error::from)?;
+    file.set_len(0)?;
     file.write_all(content)?;
     file.sync_all()?;
-    Ok(())
+    Ok(file)
 }
 
 #[cfg(test)]
@@ -335,10 +483,11 @@ mod tests {
         fs::write(&target, "original content").unwrap();
 
         let tmp_path = dir.path().join(".medd-note.md.tmp");
-        stage_temp_file(&tmp_path, b"new content").unwrap();
+        let staged = stage_temp_file(&tmp_path, b"new content").unwrap();
 
         assert_eq!(fs::read_to_string(&target).unwrap(), "original content");
         assert_eq!(fs::read_to_string(&tmp_path).unwrap(), "new content");
+        drop(staged);
     }
 
     #[test]
@@ -489,6 +638,226 @@ mod tests {
             .is_symlink());
         assert!(leftover_temp_files(real_dir.path()).is_empty());
         assert!(leftover_temp_files(link_dir.path()).is_empty());
+    }
+
+    // --- The staging-file sweep (architecture.md §3's temp-file litter) ---------------------
+    //
+    // The property under test throughout: a staging file is removed only if no process holds its
+    // lock and its target document exists in the same directory. Each test below removes exactly
+    // one of those conditions and asserts the file survives.
+
+    #[test]
+    fn temp_name_round_trips_through_target_of_temp() {
+        // The two functions are inverses, and this is what keeps them that way: `atomic_write`
+        // creates names with one and the sweep recognises them with the other, so a change to
+        // either that isn't mirrored in the other is caught here rather than by the sweep quietly
+        // ceasing to recognise medd's own litter.
+        for target in [
+            "note.md",
+            "a.md",
+            "spaces in name.md",
+            ".hidden.md",
+            "no-extension",
+        ] {
+            let temp = temp_file_name(target);
+            assert_eq!(
+                target_of_temp(&temp),
+                Some(target),
+                "round trip failed for {target:?} via {temp:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn target_of_temp_rejects_names_that_are_not_ours() {
+        assert_eq!(target_of_temp("note.md"), None);
+        assert_eq!(target_of_temp("note.md.tmp"), None); // right suffix, no prefix
+        assert_eq!(target_of_temp(".medd-note.md"), None); // right prefix, no suffix
+        assert_eq!(target_of_temp(".medd-.tmp"), None); // no document it could belong to
+        assert_eq!(target_of_temp(""), None);
+    }
+
+    #[test]
+    fn sweeps_an_abandoned_staging_file() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "the document").unwrap();
+        let litter = dir.path().join(temp_file_name("note.md"));
+        fs::write(&litter, "abandoned half-write").unwrap();
+
+        let removed = sweep_abandoned_temps(dir.path());
+
+        assert_eq!(removed, vec![litter.clone()]);
+        assert!(!litter.exists());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "the document");
+    }
+
+    #[test]
+    fn leaves_a_staging_file_whose_target_is_missing() {
+        // Not medd's litter: ours always has its target present, because the litter exists
+        // precisely *because* the rename never happened.
+        let dir = tempdir().unwrap();
+        let stray = dir.path().join(temp_file_name("never-existed.md"));
+        fs::write(&stray, "someone else's file").unwrap();
+
+        let removed = sweep_abandoned_temps(dir.path());
+
+        assert!(removed.is_empty());
+        assert!(stray.exists());
+    }
+
+    #[test]
+    fn leaves_a_staging_file_another_process_holds() {
+        // The lock is taken by *this test*, not by production code, and held across the sweep
+        // call. That is deliberate: a test that trusted the predicate could pass in a world where
+        // the lock check never ran, whereas this one cannot — the thing it asserts about is the
+        // thing it is doing.
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "the document").unwrap();
+        let in_flight = dir.path().join(temp_file_name("note.md"));
+        fs::write(&in_flight, "being written right now").unwrap();
+
+        let holder = fs::File::open(&in_flight).unwrap();
+        holder
+            .try_lock()
+            .expect("the test must hold the lock for this to mean anything");
+
+        let removed = sweep_abandoned_temps(dir.path());
+
+        assert!(
+            removed.is_empty(),
+            "a staging file under an active lock must never be removed"
+        );
+        assert!(in_flight.exists());
+        drop(holder);
+
+        // And once the holder is gone — which is what a crashed writer looks like to the kernel —
+        // the same file is swept.
+        assert_eq!(sweep_abandoned_temps(dir.path()), vec![in_flight]);
+    }
+
+    #[test]
+    fn leaves_unrelated_files_alone() {
+        let dir = tempdir().unwrap();
+        for name in [
+            "note.md",
+            ".hidden",
+            "note.md.tmp",
+            "backup.tmp",
+            ".medd-note.md",
+        ] {
+            fs::write(dir.path().join(name), "x").unwrap();
+        }
+
+        let removed = sweep_abandoned_temps(dir.path());
+
+        assert!(
+            removed.is_empty(),
+            "swept something it should not have: {removed:?}"
+        );
+        for name in [
+            "note.md",
+            ".hidden",
+            "note.md.tmp",
+            "backup.tmp",
+            ".medd-note.md",
+        ] {
+            assert!(dir.path().join(name).exists(), "{name} was removed");
+        }
+    }
+
+    #[test]
+    fn sweeps_litter_from_a_genuinely_interrupted_write() {
+        // End-to-end against the real staging protocol rather than a hand-made filename: stage a
+        // file exactly as `atomic_write` does, then drop it without renaming — which is what a
+        // process dying mid-write leaves behind, lock released by the kernel and all.
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "v1").unwrap();
+
+        let tmp_path = dir.path().join(temp_file_name("note.md"));
+        let staged = stage_temp_file(&tmp_path, b"v2, never renamed").unwrap();
+        drop(staged); // the "crash"
+
+        assert!(
+            tmp_path.exists(),
+            "precondition: the interrupted write left litter"
+        );
+
+        let removed = sweep_abandoned_temps(dir.path());
+
+        assert_eq!(removed, vec![tmp_path]);
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "v1",
+            "sweeping must never touch the document itself"
+        );
+        assert!(leftover_temp_files(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn a_second_staging_attempt_fails_without_destroying_the_first() {
+        // Two instances racing for the same staging path (ADR-003's two-window race). The loser
+        // must fail having touched nothing — `File::create` would have truncated the winner's
+        // in-progress content before discovering it could not take the lock.
+        let dir = tempdir().unwrap();
+        let tmp_path = dir.path().join(temp_file_name("note.md"));
+
+        let first = stage_temp_file(&tmp_path, b"the winner's content").unwrap();
+        let second = stage_temp_file(&tmp_path, b"the loser's content");
+
+        assert!(
+            second.is_err(),
+            "the second staging attempt must not succeed"
+        );
+        assert_eq!(
+            fs::read_to_string(&tmp_path).unwrap(),
+            "the winner's content",
+            "the loser truncated the winner's staged content"
+        );
+        drop(first);
+    }
+
+    #[test]
+    fn sweep_once_visits_a_directory_only_once_per_session() {
+        // A live session creates no litter except by ending, so a directory swept clean stays
+        // clean — re-scanning it on every autosave would put a read_dir on the write path for no
+        // possible gain.
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "the document").unwrap();
+
+        let sweeper = TempSweeper::new();
+        let first_litter = dir.path().join(temp_file_name("note.md"));
+        fs::write(&first_litter, "x").unwrap();
+        sweeper.sweep_once(dir.path());
+        assert!(!first_litter.exists(), "the first sweep should have run");
+
+        // Litter appearing afterwards is not swept again this session: the second call is a no-op.
+        fs::write(&first_litter, "x").unwrap();
+        sweeper.sweep_once(dir.path());
+        assert!(
+            first_litter.exists(),
+            "sweep_once must not re-scan a directory it has already swept"
+        );
+
+        // A different directory is still swept.
+        let other = tempdir().unwrap();
+        fs::write(other.path().join("note.md"), "doc").unwrap();
+        let other_litter = other.path().join(temp_file_name("note.md"));
+        fs::write(&other_litter, "x").unwrap();
+        sweeper.sweep_once(other.path());
+        assert!(!other_litter.exists());
+    }
+
+    #[test]
+    fn sweeping_an_unreadable_directory_is_a_noop_not_an_error() {
+        // The write that triggered the sweep has already succeeded; a cleanup problem must never
+        // be reported as a write problem, so this returns nothing rather than failing.
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        assert!(sweep_abandoned_temps(&missing).is_empty());
     }
 
     /// A `read()` racing a `write()` must never leave `last_known` disagreeing with disk: a
