@@ -333,13 +333,36 @@ safe, and are therefore queued rather than blocking — but none of them ship br
 | 6 | A non-UTF-8 external change is lossily converted, and the CAS lets medd write it back | `read()` refuses non-UTF-8 but `check_external_change` uses `from_utf8_lossy`, and the hash is of the raw bytes — so a later autosave passes CAS and writes replacement characters over the file's real content. |
 | — | `document_close` is specified in architecture.md §4 and does not exist | `last_known` grows for the session, loose-document watches are never released, and asset-protocol grants are never revoked. |
 
+From QA's retroactive pass over increments 1-6 and 8:
+
+| # | Finding | Why it matters |
+|---|---|---|
+| 7 | Every image renders with `alt=""` | `imageResolution` replaces markdown-it's image rule and drops the step that copies inline children into `alt`. More than accessibility: `images.ts` argues a broken-image icon is "the correct, honest signal" for a remote image the CSP blocks — and that argument depends on the alt surviving, because the alt is what tells the reader what didn't load. A documented rationale silently stops being true. One line, before the `src` rewrite. |
+| 6 | The find/replace panel is unthemed — a light slab in the dark editor | `EditorView.theme({…})` is called with no second argument, so CodeMirror tags the editor light regardless of the colours it paints; the dark rules ship and never match. Not `{dark: true}` — that is static and medd's scheme is decided at runtime by `prefers-color-scheme`. Drive the panel from the app's own variables, as the rest of the file does. |
+| 8 | The harness fixture claims R-1…R-7 and contains no images | R-4 is the missing one, and it is the requirement with the silent-failure history (CSP blocking `data:`; remote images deliberately not rendering). A `data:` image renders for real in the harness and is genuine coverage; a relative one only proves the rewrite fired. Both, labelled for what each proves. |
+| — | `--error` keeps its light value under the dark media query | Marginal contrast on a dark canvas. A value to set, not a finding. |
+
 Record now, fix before v0.3: **own writes emit `tree:changed`**. An atomic write reports three
 paths to FSEvents — the directory, the document, and `.medd-*.tmp` — and own-write suppression is
 specified only in terms of the document's content hash, so two of the three set `tree_changed`.
 Harmless until W-6 lands in v0.3, at which point every autosave re-lists every expanded directory.
 Note that the existing `own_write_produces_no_notification` test **cannot** catch this: it asserts
 per-path classification, never the emitted-event decision, so it passes while the behaviour it is
-named for is violated.
+named for is violated. The deeper cause is that `run_event_loop` is never executed by any test at
+all, while holding every observable decision — so this is a symptom, not a separate defect. The
+ruling is to lift the decision out as `decide(events, root, &DocumentStore) -> Vec<WatcherEvent>`
+with `run_event_loop` reduced to a thin emit loop; **batch in, batch out, never per-path**, because
+`tree_changed` is a fold across the batch and a per-path signature pushes that fold straight back
+into the untestable shell. Keep the real store and the real filesystem — the existing test already
+had the evidence in `paths_to_check`'s output and simply asserted one layer too low; an injected
+classifier would only assert against paths the author thought to enumerate, and nobody enumerates
+the temp file. Acceptance criterion: one real `document_write`, through a real watcher, against a
+real `DocumentStore`, asserting the complete emitted event set is empty.
+
+A second bug lives under the same lens: **a tracked document's deletion emits
+`document:removed-on-disk` and no `tree:changed`**, so the tree never learns the file is gone. An
+*untracked* file's deletion does emit one, which means the only deletions invisible to the tree are
+of currently-open documents — the worst subset.
 
 ---
 
