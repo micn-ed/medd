@@ -292,7 +292,26 @@ test can reach, while the criterion covers route *shaping*. And for two of three
 only ever report "untested", because the mock runtime cannot emit their events at all. **A
 criterion whose only possible answer is "untested" is not a criterion.**
 
+**Why this recurs at each new level rather than being learned once:** diagnosing the pattern in
+someone else's test is pattern-matching on a *shape*, and shapes transfer between people easily.
+Avoiding it in your own strategy requires knowing whether your own check can run — a fact about the
+system, not a shape you can recognise — and that transfers not at all. So expect the vacuity rules
+to be applied to tests reliably and to strategies unreliably, unless the reachability question
+below is carried with them.
+
 Two things to do with it:
+
+- **Reachability before efficacy.** *Before* asking whether a check would have caught the bug, ask
+  whether the check can execute against that code path at all. This is the prerequisite, and it was
+  missed here for two messages: the question *was* asked, and answered by reasoning — "breaking
+  listener L's call would fail L's test" — which was sound given a premise never checked, that a
+  test could reach L. What settled it was reading the runtime's source and seeing which five events
+  it emits.
+
+  **An unreachable path makes every criterion look satisfied, because nothing can contradict it.**
+  That is the vacuity problem arriving from underneath rather than from the side. Cheap to check:
+  for each thing a criterion claims to guard, name the mechanism that would run it. If you cannot,
+  the criterion is a description of an intention.
 
 - **Ask what a criterion would have caught, against the specific failures that prompted it.** Not
   "is this a good check" but "would this have gone red on the bug I am writing it because of." The
