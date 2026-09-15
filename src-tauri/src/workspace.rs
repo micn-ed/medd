@@ -14,6 +14,19 @@ use serde::Serialize;
 
 use crate::error::MeddError;
 
+/// Names ignored anywhere a tree gets walked or listed — dotfiles/dotdirectories, `node_modules`,
+/// and `target` (Rust's own build output, which `dir_list` and quick-open both had no opinion on
+/// until an architect review measured it: a Rust workspace this size puts north of 45,000 files
+/// under `target/` alone, none of them documents). One definition, not three: `dir_list` below,
+/// `quickopen`'s recursive walk, and `watcher.rs`'s `is_ignored_in_workspace` all used to carry
+/// their own overlapping idea of "ignored", which is exactly the shape architecture.md §2's
+/// `is_markdown` extraction already exists to prevent elsewhere. Product call, not just
+/// performance: hiding build/dependency output from the sidebar is the same class of decision as
+/// hiding dotfiles, and revisitable as a setting alongside the dotfile toggle in increment 11.
+pub fn is_ignored_name(name: &str) -> bool {
+    name.starts_with('.') || matches!(name, "node_modules" | "target")
+}
+
 /// An open workspace: just its canonical root. Canonicalises independently of `document.rs` —
 /// each module stays correct without relying on the other having prepared its inputs.
 pub struct Workspace {
@@ -101,8 +114,10 @@ pub struct TreeEntry {
 }
 
 /// Lists one level of `dir` — never recurses, so an enormous workspace never gets walked before
-/// the window appears (N-2). Hidden entries (dotfiles, `.git`, editor state directories) are
-/// omitted by default: see the increment-3 report for why.
+/// the window appears (N-2). Hidden entries (dotfiles, `.git`, editor state directories,
+/// `node_modules`, `target` — see `is_ignored_name`) are omitted by default: see the increment-3
+/// report for why dotfiles started this, and the architect's increment-9 review for why build and
+/// dependency output joined them.
 pub fn dir_list(dir: &Path) -> Result<Vec<TreeEntry>, MeddError> {
     let canonical_dir = dir.canonicalize().map_err(|e| MeddError::io(dir, e))?;
     if !canonical_dir.is_dir() {
@@ -120,7 +135,7 @@ pub fn dir_list(dir: &Path) -> Result<Vec<TreeEntry>, MeddError> {
         };
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') {
+        if is_ignored_name(&name_str) {
             continue;
         }
 
@@ -308,6 +323,21 @@ mod tests {
         fs::write(root.path().join("visible.md"), "hello").unwrap();
         fs::write(root.path().join(".hidden.md"), "hello").unwrap();
         fs::create_dir(root.path().join(".git")).unwrap();
+
+        let entries = dir_list(root.path()).unwrap();
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["visible.md"]);
+    }
+
+    #[test]
+    fn dir_list_hides_node_modules_and_target_alongside_dotfiles() {
+        // The sidebar tree, quick-open's walk, and the watcher share one `is_ignored_name` for
+        // exactly this: a workspace root that's a real Rust+JS project shouldn't show its build
+        // and dependency output, matching the architect's increment-9 product ruling.
+        let root = tempdir().unwrap();
+        fs::write(root.path().join("visible.md"), "hello").unwrap();
+        fs::create_dir(root.path().join("node_modules")).unwrap();
+        fs::create_dir(root.path().join("target")).unwrap();
 
         let entries = dir_list(root.path()).unwrap();
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();

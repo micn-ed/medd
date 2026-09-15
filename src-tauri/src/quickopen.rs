@@ -5,10 +5,13 @@
 //! that genuinely needs the whole tree. The walk here happens lazily — only when quick-open is
 //! actually invoked, never at `workspace_open` time — and its result is cached (`FileIndex`)
 //! keyed by workspace root, so repeat Cmd+P presses within the same workspace don't re-walk.
-//! `commands::quick_open_files` runs as an ordinary (non-`async`) command, which Tauri schedules
-//! off the main thread — so even the first, uncached walk of a huge workspace can't block the
-//! dialog opening; the dialog itself is a synchronous frontend state flip, and the file list
-//! fills in once the command resolves (`quickopen/quickopen.svelte.ts`, frontend side).
+//! `commands::quick_open_files` is declared `#[tauri::command(async)]` deliberately: a plain,
+//! non-`async` command is dispatched INLINE on the thread that receives the IPC message (the
+//! main/UI thread on macOS — verified by reading `tauri-macros`' codegen, not assumed), so
+//! without the `async` attribute the first, uncached walk of a huge workspace would block the
+//! whole app, not just the dialog. With it, Tauri runs the command on its async runtime instead;
+//! the dialog itself is a synchronous frontend state flip either way, and the file list fills in
+//! once the command resolves (`quickopen/quickopen.svelte.ts`, frontend side).
 //!
 //! Only `.md` files are listed, matching W-8 (non-Markdown files are visible but not editable).
 
@@ -17,7 +20,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
-use crate::watcher::is_ignored_name;
+use crate::workspace::is_ignored_name;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -159,16 +162,46 @@ mod tests {
     }
 
     #[test]
-    fn does_not_descend_into_git_or_node_modules() {
+    fn does_not_descend_into_git_node_modules_or_target() {
         let root = tempdir().unwrap();
         fs::create_dir_all(root.path().join(".git")).unwrap();
         fs::write(root.path().join(".git/HEAD"), "x").unwrap();
         fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
         fs::write(root.path().join("node_modules/pkg/readme.md"), "x").unwrap();
+        fs::create_dir_all(root.path().join("target/debug")).unwrap();
+        fs::write(root.path().join("target/debug/BUILD.md"), "x").unwrap();
         fs::write(root.path().join("visible.md"), "x").unwrap();
 
         let entries = walk_markdown_files(root.path());
         assert_eq!(names_of(&entries), vec!["visible.md"]);
+    }
+
+    // A leader review of increment 9's own numbers (measured against medd's real repository: over
+    // 45,000 files under `target/` alone) is what surfaced `target/` never having been ignored in
+    // the first place -- worth a comment here because "the fixture must actually contain what the
+    // filters exclude" is a lesson this project has paid for once already (the harness fixture
+    // that claimed image-rendering coverage with no images in it). The test above creates real
+    // `.git`, `node_modules` and `target` directories rather than asserting against their absence.
+
+    #[test]
+    fn a_directory_symlink_cycle_terminates_instead_of_walking_forever() {
+        // QA's finding: descending into a directory symlink that points back at an ancestor makes
+        // the walk unbounded, and the failure mode is silent -- no crash, no error, just a worker
+        // thread spinning forever while quick-open's dialog never populates, indistinguishable
+        // from an ordinary slow walk on the one operation whose entire point is not blocking.
+        // `walk_markdown_files` never follows directory symlinks at all (see its own doc comment:
+        // `DirEntry::file_type` reports the link's own type, not its target's) -- cycle safety by
+        // never traversing a link's target, not by a depth cap, which QA is right to rule out: a
+        // cap converts an infinite walk into a silently *wrong* one, indistinguishable from a
+        // correct result that happens to be short.
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join("notes")).unwrap();
+        fs::write(root.path().join("notes/real.md"), "x").unwrap();
+        std::os::unix::fs::symlink(root.path(), root.path().join("notes/loop")).unwrap();
+
+        let entries = walk_markdown_files(root.path());
+
+        assert_eq!(names_of(&entries), vec!["notes/real.md"]);
     }
 
     #[test]

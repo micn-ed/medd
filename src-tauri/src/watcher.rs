@@ -19,13 +19,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::document::{ContentHash, DocumentStore, ExternalChange};
 use crate::quickopen::FileIndex;
-use crate::workspace::Workspace;
+use crate::workspace::{is_ignored_name, Workspace};
 
 const COALESCE_WINDOW: Duration = Duration::from_millis(100);
-
-/// Ignored anywhere *within* a watched workspace, not counting the workspace root's own name or
-/// anything above it — architecture.md §6.
-const IGNORED_ANCESTOR_NAMES: &[&str] = &["node_modules"];
 
 pub struct FsWatcher {
     debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
@@ -53,17 +49,11 @@ impl FsWatcher {
     }
 }
 
-/// True if a single path *component's own name* is the kind this app filters everywhere it walks
-/// a tree — a dotfile/dotdirectory or `node_modules`. Shared between `is_ignored_in_workspace`'s
-/// ancestor check (below) and `quickopen`'s directory-descent pruning, so the two walks of "the
-/// same" tree can't quietly disagree about what's ignored.
-pub fn is_ignored_name(name: &str) -> bool {
-    name.starts_with('.') || IGNORED_ANCESTOR_NAMES.contains(&name)
-}
-
 /// True if `path` is noise the watcher should never surface from *within* `workspace_root` —
-/// inside `.git/`, `node_modules/`, or a dotfile directory somewhere between the root and the
-/// changed entry. Deliberately root-relative rather than checked against the absolute path: a
+/// inside `.git/`, `node_modules/`, `target/`, or a dotfile directory somewhere between the root
+/// and the changed entry (`is_ignored_name`, `workspace.rs` — shared with `dir_list` and
+/// `quickopen`'s walk so the three don't quietly disagree about what "ignored" means).
+/// Deliberately root-relative rather than checked against the absolute path: a
 /// workspace that itself lives under, or even *is*, a dotfile directory (someone opens their
 /// `~/.dotfiles` to edit its README) must not have everything inside it silently ignored just
 /// because the root's own name happens to start with a dot. `path` not being under
