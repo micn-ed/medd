@@ -581,4 +581,56 @@ mod tests {
              descends into it: {walk_entered_the_symlink}. tree_dirs={tree_dirs:?} walked={walked:?}"
         );
     }
+
+    #[test]
+    fn the_ignore_rule_reaches_the_same_answer_by_every_route() {
+        // AGREEMENT, in the same shape as `the_tree_and_the_walk_agree_...` above: a DIFFERENTIAL
+        // assertion — **adding an alias to an ignored location must not change what the walk
+        // finds** — rather than an expected-output one. It does not need to know what the right
+        // answer is, only that adding a path to the same content does not change it.
+        //
+        // WHAT THIS DOES AND DOES NOT COVER, because the name promises more than the body keeps.
+        // The generality is in the *form*, not in the mechanism: this body creates a symlink, so
+        // today it catches exactly what `a_symlink_into_an_ignored_directory_is_not_followed` and
+        // its sibling catch — verified by mutation, all three die to the same mutant and no mutant
+        // distinguishes them. It is REDUNDANT, which is not the same as vacuous: drop the
+        // symlink-route guard and it does fail.
+        //
+        // It will hold for a hardlinked directory, a bind mount, or an include mechanism when
+        // someone adds that route *to this test*, and not one moment before. Its job is to make
+        // the next route cheap to cover — two lines here, against a whole new expected-output
+        // assertion in a case test — and to be the named home for the class, not to cover the
+        // next route in advance.
+        //
+        // The failure it pins (eighth instance of one question answered in two places):
+        // `is_ignored_name` checks each entry's own name as the walk descends, which is equivalent
+        // to ancestor-checking for real directories because the walk must pass through the ignored
+        // ancestor to reach its contents. A symlink does not pass through — it jumps. So `aliased`
+        // -> `node_modules/docs` is a link named `aliased`, which is not an ignored name, and
+        // following it lands inside an ignored directory the real route blocks. A symlink into
+        // `node_modules` or `target` puts thousands of files back into Cmd+P, through the one
+        // route the shared ignore predicate does not cover.
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join("node_modules/docs")).unwrap();
+        fs::write(root.path().join("node_modules/docs/hidden.md"), "x").unwrap();
+        fs::write(root.path().join("real.md"), "x").unwrap();
+
+        let before = walk_markdown_files(root.path());
+        let without_alias: Vec<String> = names_of(&before).iter().map(|s| s.to_string()).collect();
+
+        std::os::unix::fs::symlink(
+            root.path().join("node_modules/docs"),
+            root.path().join("aliased"),
+        )
+        .unwrap();
+        let after = walk_markdown_files(root.path());
+        let with_alias: Vec<String> = names_of(&after).iter().map(|s| s.to_string()).collect();
+
+        assert_eq!(
+            with_alias, without_alias,
+            "adding an alias to an ignored directory changed what the walk finds: {without_alias:?} \
+             became {with_alias:?}. The ignore rule must answer the same for every route into a \
+             location, not only the route that passes through its ancestor."
+        );
+    }
 }
