@@ -280,8 +280,8 @@ Deliberately late: the fiddliest platform work, and nothing above depends on it.
 - **The pending-open buffer.** `RunEvent::Opened` can fire before the WebView has attached its
   listeners. Opens are buffered in Rust state and drained by `frontend_ready()`. A cold launch
   goes through this buffer every time — it is the normal path, not the exception.
-- Startup race: retry-with-backoff (three attempts over ~100ms) before falling back to becoming
-  primary.
+- Startup race: **not mitigated** — see ADR-003. The plugin unlinks then binds, so two simultaneous
+  launches produce two windows and there is no hook to retry from. Accepted and documented.
 - Window activation: attempt `show()` + `set_focus()`, and **depend on neither**. See the known
   limitation below.
 - `scripts/medd` shim: if the socket accepts a connection, exec the bundle binary so the plugin's

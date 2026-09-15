@@ -81,12 +81,22 @@ enter one.
   buffer and drained by the frontend's `frontend_ready()` call. Cold launch from Finder goes
   through this buffer *every* time; it is the normal path.
 - **The socket path must be stable and shared.** The CLI shim and the running app must compute the
-  same path from the same fixed location (under the application support directory), never from the
-  invoking binary's own location — the shim and the bundle do not know where the other lives. This
-  is the invariant that Q-14's CLI-distribution design must not break (architecture.md §9).
-- **Startup race.** Two simultaneous launches resolve naturally: the OS-level socket bind is
-  exclusive, so whichever binds first becomes primary. The loser should retry-with-backoff (three
-  attempts over ~100 ms) before falling back to becoming primary itself. Vanishingly unlikely in a
-  single-user desktop app, cheap to guard.
+  same path from nothing about the invoking binary's own location — the shim and the bundle do not
+  know where the other lives. **The path itself is the plugin's, not medd's**: it hardcodes
+  `/tmp/<identifier>_si.sock` with no configuration hook, so it derives from `config.identifier`, a
+  compile-time constant. That already satisfies the invariant. An earlier version of this ADR and
+  of architecture.md §9 specified a location under the application support directory, which nothing
+  binds — the intent was right and the description was wrong.
+- **Startup race — accepted, unmitigated, and worse than first described.** This ADR previously
+  claimed the OS-level bind is exclusive so the loser could retry-with-backoff. Neither half is
+  implementable or accurate. There is no hook to retry from: the plugin makes one attempt, inside
+  `.setup()`. And the bind is not the exclusive step — on `NotFound` the plugin unlinks the socket
+  path and *then* binds, so two simultaneous launches both unlink and both bind. Verified: two
+  listeners, the first orphaned on an unlinked inode and permanently unreachable, every later
+  invocation reaching the second. The visible result is **two windows, and I-1 silently violated**.
+
+  Vanishingly unlikely in single-user desktop use, and not fixable at medd's layer without
+  replacing the plugin. It is recorded as a known limitation rather than papered over: a
+  requirement marked Must that cannot be fully guaranteed deserves to be stated.
 - **Finder registration is v0.2** (scope-mvp.md), but `RunEvent::Opened` handling is designed in
   now so that adding the file association is a manifest change rather than an architectural one.

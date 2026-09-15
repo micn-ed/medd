@@ -97,9 +97,19 @@ medd/
 └── docs/                       this directory
 ```
 
-One Rust module per concern, each with a narrow public surface; `commands.rs` is the only module
-that knows Tauri's command macros exist, so the rest stays plain Rust and directly unit-testable
-(§9).
+One Rust module per concern, each with a narrow public surface.
+
+**Tauri types are confined to a named, minimal set of shells: `commands.rs`'s command surface and
+`watcher.rs`'s emit loop. A shell contains no decisions. If a Tauri-aware function has a branch in
+it, it is in the wrong place.**
+
+An earlier version of this rule said `commands.rs` was the only module that knew Tauri's *command
+macros* existed. That described an implementation detail and called it a boundary, and it let a
+second module become Tauri-aware without tripping it — `watcher.rs` imports `AppHandle`/`Emitter`
+and emits inline, and it is no coincidence that the function holding the `AppHandle` turned out to
+be the one with no test at all. The property the rule was always buying is that every decision is
+reachable without a runtime; the restatement above is checkable by reading, which the original was
+not.
 
 ---
 
@@ -157,6 +167,31 @@ Step 2 is what makes autosave safe rather than merely convenient. Without it, th
 detecting an external change and the next debounce firing is a lost-update race; with it, medd
 physically cannot overwrite a change it has not seen.
 
+### Line endings: normalised on read, restored on write
+
+"The frontend owns the document" (§1) has a consequence the original text didn't state: CodeMirror
+normalises whatever line breaks it's handed to `\n` internally, regardless of what medd gives it.
+Left alone, that means a CRLF document has two different texts in play the moment it opens — the
+raw CRLF bytes in `lastSyncedText`, and the same document LF-normalised inside the retained
+`EditorState` — and every diff computed between them (in particular the minimal-change reload on
+an external edit) is comparing across a boundary neither side knows exists. Increment 7's review
+found this corrupts CRLF documents on exactly the path §3 calls the safe, silent one, and the
+corruption then autosaves.
+
+The fix, and the invariant it establishes: **the frontend never sees anything but LF, and never
+learns line endings exist.** `document_read` detects the document's dominant convention from the
+raw bytes and hands back LF-only content; `document_write` restores that convention immediately
+before the bytes touch disk, and hashes what was actually written, not what the frontend sent. The
+convention is re-detected on every read, so a file whose ending changes externally (a `git
+checkout` flipping `text=auto`) is picked up rather than remembered stale. Only two conventions
+exist — LF and CRLF — and a lone `\r` (classic Mac-era files) folds into LF at detection time
+rather than being given a third representation. A file with mixed endings is, as a documented
+consequence rather than a bug, fully normalised to its dominant convention by its *first* write
+through medd — collapsing to one in-memory representation only has one convention left to restore.
+
+The invariant this buys: **`lastSyncedText` and the retained `EditorState` are always in the same
+line-ending convention (LF), so a diff between them is always comparing like with like.**
+
 ### Reading and external change
 
 The watcher (§6) reports that a file changed. Rust re-reads and hashes it:
@@ -184,16 +219,30 @@ The frontend then applies D-11:
         adopt new hash                 ┌───────┴────────┐
         no UI shown                 Reload           Keep mine
                                        │                 │
-                              take disk content   adopt new hash as
-                              discard local edits expected_hash, resume
-                                                  autosave (next write
-                                                  overwrites disk)
+                              take disk content   adopt new hash as baseline,
+                              discard local edits  schedule an autosave tick
+                                                    (next write overwrites disk)
 ```
 
-"Keep mine" deliberately does not write immediately — it adopts the new disk hash as the
-compare-and-swap baseline and resumes normal autosave, so the user's next keystroke is what
-commits the decision. `Diff…` is a desirable third option on that banner and is explicitly **not**
-v0.1.
+**"Keep mine" resumes autosave rather than performing a write of its own.** It adopts the new disk
+hash as the compare-and-swap baseline, clears the conflict, leaves the buffer untouched, and
+schedules an autosave tick. Because `dirty` is derived (`currentText !== lastSyncedText`) and
+`lastSyncedText` becomes the *disk's* content, the buffer is dirty against the new baseline, so
+that tick writes the user's version over disk — about a second after the click, with no further
+keystroke needed.
+
+What "does not write immediately" buys is a single write path: `resolveConflictKeepMine` is a pure
+state transition with no I/O, so there is exactly one place in medd that writes a document, and it
+is the one that is compare-and-swapped and tested. Scheduling a tick explicitly (`doc/`'s
+`keepMine`), rather than relying on whichever debounce timer happens to have survived the conflict,
+is what makes that true in every case rather than most of them — increment 7's review found the
+un-scheduled version left "Keep mine" unsaved indefinitely whenever the conflict was discovered by
+a rejected compare-and-swap write, since that write had already spent the only timer in flight.
+
+The consequence to be honest about: **"Keep mine" discards the disk version within about a second,
+and the user has never seen it.** `Diff…` is a desirable third option on that banner and is
+explicitly **not** v0.1; with it deferred, the banner's own wording is what tells the user that
+before they click, which is why it says what it overwrites rather than just what it discards.
 
 ### Dirty state
 
@@ -397,28 +446,46 @@ a workspace with ten thousand files must not be walked before the window appears
 `medd` on `PATH` is a small shell shim, symlinked from `/usr/local/bin` (or `~/.local/bin`) by a
 `make install-cli` target. Homebrew packaging is deferred.
 
-The shim exists because the warm and cold cases genuinely differ:
+**One path, no probe.** The shim always executes the app binary inside the bundle
+(`medd.app/Contents/MacOS/medd`), detached, with the user's arguments. The single-instance plugin
+then makes the warm/cold decision itself: if a socket is already bound it forwards `argv` and the
+working directory and exits in milliseconds; if not, this process becomes the primary.
 
-- **An instance is running.** The shim executes the app binary inside the bundle
-  (`Medd.app/Contents/MacOS/medd`) with the user's arguments. The single-instance plugin's client
-  side detects the bound socket, forwards `argv` and the working directory, and exits in
-  milliseconds. Going through the plugin's own client rather than writing to the socket directly
-  keeps medd off the plugin's internal wire format.
-- **No instance is running.** The shim uses `open -a` so the app is launched by Launch Services —
-  detached from the terminal, with proper bundle identity and dock presence. Executing the binary
-  directly here would tie the app's lifetime to the terminal session that started it, which is
-  plainly wrong for a resident app.
+An earlier version of this design had the shim probe the socket first and branch — executing the
+binary when warm, `open -a` when cold. That was wrong in a way worth recording, because it looks
+reasonable: it re-decides something the plugin already decides correctly, atomically, and exactly
+once, and the probe itself is not side-effect-free. A bare connect-and-close makes the primary's
+read return zero bytes, which becomes an empty argument list, **which fires the primary's open
+callback.** Every CLI invocation would have opened a spurious document and attempted activation
+twice, and two probes racing would reintroduce a TOCTOU the plugin doesn't have.
 
-The shim distinguishes the two by testing whether the single-instance socket accepts a connection.
-That socket path must be derived from a fixed, stable location (under the application support
-directory) computed identically by both the shim and the app — never from the invoking binary's
-own location, since the shim and the bundle do not know where the other lives.
+**Detachment is doing real work and is not optional.** Measured on a real bundle: executing the
+binary directly gives correct bundle identity (`CFBundleIdentifier` resolved from the bundle path),
+`type="Foreground"` — so Dock presence and normal activation policy — and, launched with `nohup … &`,
+the process reparents to `launchd` and outlives the terminal that started it. Without that
+detachment the cold-launch case dies with the shell, which is what `open -a` was originally there
+to prevent.
+
+**The socket path is the plugin's, not medd's.** `tauri-plugin-single-instance` hardcodes
+`/tmp/<identifier>_si.sock` — `/tmp/com_micned_medd_si.sock` here — and exposes no configuration
+hook. This document previously specified a path under the application support directory, which
+nothing ever binds; anyone implementing it literally would have built a path that could never be
+found. The *invariant* that specification was protecting is intact and is worth restating, because
+it is the property that matters: the path derives only from `config.identifier`, a compile-time
+constant, and from **nothing about the invoking binary's location** — so the shim and the bundle
+never need to agree on where the other lives.
 
 The shim resolves relative paths to absolute before handing them on, because the running instance's
 working directory is not the user's.
 
-This is the fiddliest part of the design and the most likely to need adjustment once it meets a
-real machine. The constraint that must survive any adjustment is the stable shared socket path.
+**`medd <nonexistent-file>` is an error in v0.1**, not a create. Every path canonicalises before
+use, so the most natural CLI invocation for a *new* note fails — and that is the accepted
+behaviour rather than an oversight. v0.1 has no New File anywhere (that is a v0.3 item), so
+create-on-CLI would be the only creation path in the product, arriving through its most obscure
+entry point; and a file that does not exist yet has no compare-and-swap baseline, which is exactly
+the ambiguity §3 exists to eliminate. The error must say the file does not exist, and must not use
+an error surface that replaces the tab UI — hiding the user's open documents because one argument
+was wrong is worse than the problem it reports.
 
 ---
 

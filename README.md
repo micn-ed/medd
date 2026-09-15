@@ -54,6 +54,12 @@ refresh, and above roughly 10 MB the document opens read-only with no preview. E
 in the first band. The thresholds are tunable constants and get replaced with measured values
 during v0.1. See [architecture.md §8](docs/architecture.md).
 
+**Two launches at the exact same instant can produce two windows.** medd is meant to be a single
+process, and in ordinary use it is. The single-instance mechanism it relies on removes and
+recreates its lock in two steps rather than one, so two launches landing inside that window can
+both believe they are the first. Rare, and not fixable without replacing the mechanism; recorded
+rather than hoped over. See [ADR-003](docs/adr/003-launch-routing.md).
+
 **Images hosted on the web will not render.** A `![](https://…)` in a document shows a
 broken-image icon. This is deliberate: medd works fully offline (N-6) and holds a content
 security policy that permits no network origin at all, which is what stops a document being able
