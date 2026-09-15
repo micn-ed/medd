@@ -286,8 +286,13 @@ mod tests {
 
         let coordinator = Arc::new(QuitCoordinator::new());
         let decision = coordinator.decide();
-        assert!(decision.prevent, "the first exit-shaped event must be prevented");
-        let rx = decision.start_flush.expect("the first decision starts the flush");
+        assert!(
+            decision.prevent,
+            "the first exit-shaped event must be prevented"
+        );
+        let rx = decision
+            .start_flush
+            .expect("the first decision starts the flush");
 
         let (c, s, f) = (coordinator.clone(), store.clone(), file.clone());
         thread::spawn(move || {
@@ -313,7 +318,10 @@ mod tests {
 
         // And the exit that thread then triggers must be allowed through.
         coordinator.mark_ready_to_exit();
-        assert!(!coordinator.decide().prevent, "the module's own exit must not be prevented");
+        assert!(
+            !coordinator.decide().prevent,
+            "the module's own exit must not be prevented"
+        );
     }
 
     #[test]
@@ -332,8 +340,14 @@ mod tests {
         let rejected = store.write(&file, "medd's version", &stale).is_err();
         coordinator.signal_ready();
 
-        assert!(rejected, "a stale-hash quit-time write must be rejected, not forced");
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "changed by someone else");
+        assert!(
+            rejected,
+            "a stale-hash quit-time write must be rejected, not forced"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "changed by someone else"
+        );
         assert!(wait_for_quit_signal(&rx, QUIT_FLUSH_CEILING));
     }
 
@@ -347,8 +361,14 @@ mod tests {
 
         for _ in 0..5 {
             let again = coordinator.decide();
-            assert!(again.prevent, "a repeat press must still be prevented, not let through");
-            assert!(again.start_flush.is_none(), "and must not start a second flush");
+            assert!(
+                again.prevent,
+                "a repeat press must still be prevented, not let through"
+            );
+            assert!(
+                again.start_flush.is_none(),
+                "and must not start a second flush"
+            );
         }
         // The flush the first decision started is still the only one, and still owns the exit.
         assert!(!coordinator.is_ready_to_exit());
