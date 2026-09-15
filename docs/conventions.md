@@ -154,6 +154,46 @@ the change that makes a detector blind is the same change that has everyone's at
 
 ---
 
+## A tool whose failure mode is silence must fail loudly when it does nothing
+
+The mutation harness in `scripts/mutants.sh` took five bug fixes to work, and **four of them failed
+toward a clean pass.** Under `set -euo pipefail`, a green baseline makes `grep` exit 1; a working
+mutant makes the test runner exit 1; `[ -z ] && continue` returns 1 for every real row. Each ended
+the script mid-loop, after which it printed nothing and exited 0 — and **for a mutation harness,
+"no output, no survivors" is exactly what success looks like.** The tool built to hunt silent
+failures spent its first hour being one.
+
+So: any tool whose *success* is reported by an absence needs a guard that fails loudly when it did
+no work. The harness now refuses to exit 0 if zero mutants ran.
+
+The fifth bug is the sharper one. The field separator was `|`, which also occurs inside the code
+being mutated (`tab.conflict || tab.detached`), so one mutation was split mid-expression and
+applied malformed. **A malformed mutation injects a syntax error, fails every test at once, and
+reports a huge kill — a false result that looks better than a real one.** It was caught by a
+compile check added on general principle an hour earlier, which is the most direct argument for
+that check anyone could ask for: verify the mutant is valid code before believing what its failures
+mean.
+
+---
+
+## `test.fails()` is the wrong tool for a known-broken behaviour
+
+It passes when the body throws **for any reason at all** — a genuine assertion failure, a call to
+an undefined function, and a `throw` in setup are all reported identically as "expected fail". So
+it certifies *something went wrong in here*, not *this behaviour is broken as described*. A rename
+rots the test into failing for an unrelated reason and it keeps reporting green, which is what you
+want to see, so nobody looks.
+
+Its apparent advantage — going red when the fix lands, announcing itself — evaporates too: a test
+already failing for the wrong reason keeps failing after the fix, and announces nothing.
+
+**Use a characterisation test instead:** a plain assertion on the current, wrong value, green now
+and red the moment the defect is fixed, failing *specifically* on a value mismatch. Say in a header
+that it asserts wrong behaviour deliberately, and mark each assertion with what it should become.
+The fix is then a mechanical diff.
+
+---
+
 ## Measured, not estimated — and validate the instrument
 
 **Why.** Reading mode's column width was specified in `ch`, which is the advance width of the "0"
