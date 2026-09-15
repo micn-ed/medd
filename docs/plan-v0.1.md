@@ -326,6 +326,34 @@ Deliberately late: the fiddliest platform work, and nothing above depends on it.
   that listener is untested whatever coverage reports. Failures named for a *different* listener
   mean the tests do not distinguish the routes. The `route_open` unit tests are still worth having;
   they are simply not evidence about the thing that keeps breaking.
+- **`route_open` takes owned paths and returns a decision for the caller to act on.** "It must not
+  block" has no observable and no threshold, so as a requirement it cannot fail — the same shape as
+  §9's dialog bullet before it was split. But unlike that one it has a structural answer, because
+  it is a constraint on what the code may *contain* rather than on what it computes: a function
+  given only owned paths, returning a decision, **cannot reach a dialog or a walk**. The constraint
+  then holds by construction instead of by vigilance. Same move as the lock extraction's owned
+  root — and the third time on this project that an unfalsifiable property has turned out to be
+  expressible in a signature.
+- **The pending-open buffer's test must emit *before* the frontend is ready.** This is the easiest
+  thing in the increment to test vacuously, and it is also the most load-bearing, since §10 calls
+  it the normal path for every cold launch. The natural test — attach listeners, emit an open,
+  assert the tab opened — **passes with no buffer whatsoever**, because the listener was already
+  there. It reads as "opening a file works" and exercises none of the buffering. The discriminating
+  order is the inconvenient one: emit, *then* attach, *then* drain. The awkward sequence is the
+  real one, which is exactly why the comfortable one gets written.
+- **Draining needs both halves asserted.** A test checking only that nothing is *lost* passes
+  against an implementation that never clears the buffer and re-opens every file on each WebView
+  reload. "Nothing lost" and "nothing duplicated" are separate claims and only the first is
+  obvious.
+- **"Never start a second process" is not unit-testable, and the parts that are must not be
+  mistaken for the whole.** The shim's argv handling is shell-testable, the refused socket bind is
+  Rust-testable, the forwarded paths are frontend-testable — but *convergence* needs two real
+  processes and nothing smaller. Decompose it explicitly, as the quit gesture was, so the covered
+  fraction is visible.
+- **Relative path resolution must be tested through the shim.** Every existing path test passes
+  absolute paths, because `canonicalize()` requires the target to exist — so none of them exercise
+  resolution at all. And since the shim is authoritative for it, a single-process test
+  *structurally cannot* fail the claim, which is about two processes disagreeing about `cwd`.
 - **The pending-open buffer.** `RunEvent::Opened` can fire before the WebView has attached its
   listeners. Opens are buffered in Rust state and drained by `frontend_ready()`. A cold launch
   goes through this buffer every time — it is the normal path, not the exception.
