@@ -319,6 +319,21 @@ be currently inert here, the agreement test passed either way, which is correct:
 match, never the mechanism. Saying so prevents the green being cited later as evidence for
 something it never claimed.
 
+**A choice is one line over the shared answer; a duplicate is a second answer.** That is the test
+for when local logic beside a shared predicate is legitimate. The watcher needs the ignore question
+asked of *ancestors only*, while the walk needs the leaf included — so the watcher composes one line
+on top of the shared form, named for its reason. It is a decision about *watching* (something
+changed inside a directory medd cares about, and *what* changed is not what decides that), not about
+workspace membership. If the local part grows past composing over the shared answer into
+re-deriving it, it has stopped being a choice.
+
+**And there is a positive signal for successful sharing, not only a negative one for duplication.**
+Break the shared predicate and see how many callers fail. When excluding the leaf from
+`is_within_ignored` failed tests in *three* modules at once, that was the shape of a genuinely
+shared question: **breaking it breaks every caller, rather than breaking one copy while the others
+quietly keep agreeing.** The absence of that spread is what duplication looks like from the outside
+— and it only shows up if the mutant is run against the whole suite.
+
 **Not everything that looks shared should be shared.** A question two callers both *could* ask is
 only a shared predicate if they are asking the same question for the same reason. `dir_list` needs
 to know whether an entry resolves to anything at all, because it has a category for the answer
