@@ -112,6 +112,11 @@ more than the finding was.
   after being split apart by hand. Naming paths on the `commit` itself bypasses the shared index
   entirely.
 
+  Mind the argument order: **`git commit -m "…" -- <paths>`**, with the message *before* the
+  pathspec. Everything after `--` is treated as a path, so putting `-m` after it silently consumes
+  the message and the flag as filenames. Found on the first real use of the rule by someone other
+  than its author, which is the usual way an under-specified instruction gets found.
+
 - **Never `stash`, `reset`, or `checkout` the shared tree to get a clean state — copy it.** Also
   learned by doing. Running `git stash` to get an uncontaminated test read removed a colleague's
   in-flight work from under them mid-edit; it was restored within a minute, and only because it was
