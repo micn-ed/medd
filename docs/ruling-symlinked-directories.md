@@ -141,3 +141,114 @@ ignore predicate across three call sites introduced a fresh literal for a differ
 the new code. Sharing one and duplicating another in one change is not carelessness — it is what
 happens when the rule is "share predicates" rather than "a predicate has one owner". The second
 phrasing is checkable while writing; the first is only checkable while reviewing.
+
+---
+
+# Amendment — ruling on the predicate, and a change of sequencing
+
+**Asked:** rule on the predicate as well as the semantics, and say if the two consumers genuinely
+need different questions.
+
+Two answers below, and then a sequencing change, because **QA's red agreement test turns out to be
+a forcing function** and taking it seriously produces a better plan than the "defer it all" I gave
+above.
+
+## A. No to a shared classifier. Yes to a shared predicate
+
+The two consumers do **not** ask the same question, and it matters:
+
+- `dir_list` produces `TreeEntry { name, path, kind }` where `kind ∈ {Directory, Markdown, Other}`.
+  It is answering **"how should this entry be presented in the sidebar?"** — three-way,
+  presentational, and it must classify *everything*, including non-Markdown files as `Other`
+  (visible but inert, W-8).
+- The walk asks two two-way questions: **"do I descend into this?"** and **"is this a document to
+  offer?"** It has no use for a third category and should never see one.
+
+So a shared `classify_entry -> EntryKind` would be the wrong extraction. It would hand the walk a
+sidebar category — `Other` — that exists for a UI concern the walk knows nothing about, and the
+walk would have to ignore it. That is coupling, not sharing.
+
+**But there is a genuinely shared atom, and it is exactly where they disagree:** *does this entry
+resolve to a directory, for the purpose of deciding whether medd treats it as a container of
+workspace content?* One question, one answer, two callers. That is the same granularity as the two
+precedents — `is_markdown` and `is_ignored_name` are both **predicates**, not classifiers — so this
+is the same move a third time rather than a bigger one.
+
+**Name it `resolves_to_directory`, in `workspace.rs` beside the other two.** Not `is_directory`:
+the one word that carries the ruling is *resolves*, and the failure mode being guarded against is
+someone "simplifying" it to `entry.file_type().is_dir()`. A name containing *resolves* makes that
+substitution visibly wrong at the call site, which `is_directory` would not.
+
+### And the set now has a name, which is the part worth generalising
+
+`is_ignored_name`, `is_markdown`, `resolves_to_directory` are not three helpers that happen to live
+together. Together they **are medd's definition of what a workspace contains.** Every instance of
+this bug has been a new consumer re-answering one of them, and a named group is far easier to check
+a new consumer against than three scattered functions:
+
+> **The workspace predicates.** Every question about what medd considers part of a workspace is
+> answered exactly once, here. A caller that needs one of these answers calls it; a caller that
+> computes it again is a bug, even when it computes the same thing.
+
+That last clause is the one that would have caught `e0822cf` at review time, where the duplicated
+literal was character-for-character equivalent to the shared function.
+
+## B. Why the same commit shared one predicate and duplicated another
+
+Worth recording, because it is not carelessness. `b7f8bff` extracted `is_ignored_name` across three
+call sites *and* introduced a fresh `.md` literal eleven lines below `is_markdown`.
+
+That is what happens when the rule is **"share predicates"** rather than **"a predicate has one
+owner."** The first is a thing you notice while reviewing someone else's diff; the second is a thing
+you notice while writing your own, because it asks *who owns this answer* before you write the
+answer down. Same content, different moment — and only the second fires in time.
+
+## C. Sequencing: QA's red test is a forcing function, and it changes my answer
+
+I sequenced the whole thing to v0.2. That was wrong, and QA's test is what shows it.
+
+**Their agreement test cannot go green at the current semantics** — not by any cheap fix. The
+`Other`-classification patch I proposed above fixes case 2 (out-of-root), but case 1 (a link
+pointing *inside* the root) still disagrees: the tree follows it, the walk does not. The only ways
+to green are to implement a ruling or to adopt the option I rejected. So a deferral means **a
+known-red test parked on a side branch for a release**, and known-red tests rot.
+
+But the expensive part of my ruling is not the part agreement needs. Separating them:
+
+- **Cheap, and all that agreement requires:** both sides follow symlinked directories *within* the
+  root, and both refuse ones resolving outside it.
+- **Expensive, security-adjacent, genuinely v0.2:** relaxing `Workspace::dir_list`'s guard (the
+  `..`-scan-plus-lexical-prefix rule in §2) so that out-of-root symlinks work at all.
+
+So there is a clean intermediate I missed:
+
+**Land now.** `resolves_to_directory`; the walk descends when it is true *and* the canonical target
+is under the root; a visited set of canonical paths for cycles and diamonds; and `dir_list`
+classifying an out-of-root symlinked directory as `Other` rather than `Directory`. All four cases
+then agree, QA's test goes green immediately, and the tree stops displaying a directory it will
+refuse to open.
+
+**Land in v0.2.** The guard relaxation, which flips both consumers together — and because the
+answer lives in one predicate plus one guard by then, it is one edit and the agreement test stays
+green across it. That is the payoff of (A): the semantic change becomes a single decision expressed
+in one place, exactly as the leader said it would.
+
+The honest description of the intermediate is *"medd follows the symlinks you put inside your
+workspace, and does not yet reach outside it"* — which is a sentence we can write in the README,
+where *"it shows the directory but cannot open it"* is not.
+
+## D. On the agreement test's character after the fix
+
+The convention is right that the test should become redundant-but-cheap. One refinement: its
+character changes rather than its value.
+
+Before the shared predicate it detects **drift** — two mechanisms diverging. After, the only way it
+can fail is if someone **stops calling** the predicate. That is still worth catching and it is the
+cheapest possible guard, but it means someone will eventually find a test that "can't fail" and
+delete it. Its doc comment should say which failure it now guards, so the answer to *"why is this
+here?"* is in the file rather than in this document.
+
+**I have not implemented the landable package** — `dir_list`'s classification is product-visible and
+I said above it needs the leader's approval rather than mine. Say the word and it is a short branch:
+the predicate, the visited set, the two call sites, the diamond test, and QA's agreement test going
+green with it.
