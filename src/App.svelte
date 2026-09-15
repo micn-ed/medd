@@ -18,7 +18,7 @@
     registerMountedView,
     unregisterMountedView,
   } from './tabs'
-  import { ConflictBanner, initDocSync, reload, keepMine } from './doc'
+  import { ConflictBanner, initDocSync, reload, keepMine, waitForQuiescence } from './doc'
 
   initDocSync()
 
@@ -69,6 +69,14 @@
   async function openFile(path: string) {
     error = ''
     try {
+      // If this path was just closed with a write still airborne (autosave issues a write
+      // regardless of the tab's own lifetime — doc/doc.ts), reading now could land on disk a
+      // moment before that write commits, handing this fresh tab a baseline the write's own
+      // settling immediately makes stale: a conflict banner on a file the user just opened and
+      // has not touched, offering their own earlier text back as though it were someone else's
+      // change (increment-7 review). Waiting for quiescence first means the read always reflects
+      // what's actually, finally on disk for this path.
+      await waitForQuiescence(path)
       const result = await invoke<ReadResult>('document_read', { path })
       openTab(path, result.content, result.hash, workspaceRoot)
     } catch (e) {

@@ -24,7 +24,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 // Imported after the mocks above so doc.ts's own `invoke`/`listen` imports resolve to them.
-const { initDocSync, reload, keepMine } = await import('./doc')
+const { initDocSync, reload, keepMine, flushAll, waitForQuiescence, waitForAllQuiescent } =
+  await import('./doc')
 
 function fireBackendEvent(name: string, payload: unknown) {
   listeners.get(name)?.({ payload })
@@ -526,5 +527,144 @@ describe('external removal (D-11)', () => {
 
     await vi.advanceTimersByTimeAsync(2000)
     expect(invokeMock).not.toHaveBeenCalled()
+  })
+})
+
+// The quiescence handle (leader review, following the route-C fix): a caller about to
+// `document_read` a path must not do so while a write for it is still airborne, since the read
+// can land on disk a moment before that write commits and hand back a baseline the very next
+// settle makes stale (App.svelte's `openFile` now awaits this before reading). It doubles as the
+// primitive a future quit path needs to know every write has actually landed before letting the
+// process exit.
+describe('waitForQuiescence', () => {
+  test('resolves immediately for a path with nothing outstanding', async () => {
+    let resolved = false
+    void waitForQuiescence('/workspace/never-touched.md').then(() => {
+      resolved = true
+    })
+    await Promise.resolve()
+    expect(resolved).toBe(true)
+  })
+
+  test('does not resolve until an in-flight write settles', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    let resolveWrite: (hash: string) => void = () => {}
+    invokeMock.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveWrite = resolve
+      }),
+    )
+    edit('/workspace/a.md', 'X')
+    await vi.advanceTimersByTimeAsync(1000) // the write is now in flight
+
+    let resolved = false
+    void waitForQuiescence('/workspace/a.md').then(() => {
+      resolved = true
+    })
+    await Promise.resolve()
+    expect(resolved).toBe(false)
+
+    resolveWrite!('h2')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(resolved).toBe(true)
+  })
+
+  // The subtlety the leader's review named explicitly: quiescence is not monotonic within a
+  // drain. `performWrite`'s own `finally` can immediately start a second write for a request
+  // queued behind the first, so a naive one-shot check taken right as the first write settles
+  // would report quiescent when a second write is, in fact, about to begin.
+  test('does not resolve after the first of two chained writes -- only after both settle', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    let resolveFirstWrite: (hash: string) => void = () => {}
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirstWrite = resolve
+        }),
+    )
+    edit('/workspace/a.md', 'A')
+    await vi.advanceTimersByTimeAsync(1000) // tick 1 fires; write "v1A" in flight
+
+    edit('/workspace/a.md', 'B')
+    await vi.advanceTimersByTimeAsync(1000) // tick 2 fires; a write is in flight -> "v1AB" queued
+
+    let resolved = false
+    void waitForQuiescence('/workspace/a.md').then(() => {
+      resolved = true
+    })
+
+    let resolveSecondWrite: (hash: string) => void = () => {}
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveSecondWrite = resolve
+        }),
+    )
+    resolveFirstWrite!('h2') // the first write lands; the queued one starts immediately
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(resolved).toBe(false) // still not quiescent -- the chained write is now in flight
+
+    resolveSecondWrite!('h3')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(resolved).toBe(true)
+  })
+
+  test('waitForAllQuiescent waits for every outstanding path, not just one', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    openTab('/workspace/b.md', 'v1', 'h1', '/workspace')
+    let resolveA: (hash: string) => void = () => {}
+    let resolveB: (hash: string) => void = () => {}
+    invokeMock.mockImplementation(
+      (_cmd: string, args?: { path?: string }) =>
+        new Promise<string>((resolve) => {
+          if (args?.path === '/workspace/a.md') resolveA = resolve
+          else resolveB = resolve
+        }),
+    )
+    edit('/workspace/a.md', 'X')
+    edit('/workspace/b.md', 'Y')
+    await vi.advanceTimersByTimeAsync(1000) // both writes now in flight
+
+    let resolved = false
+    const done = waitForAllQuiescent().then(() => {
+      resolved = true
+    })
+
+    resolveA!('h2')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(resolved).toBe(false) // b.md is still outstanding
+
+    resolveB!('h2')
+    await done // awaits the real promise chain rather than guessing a microtask-tick count
+    expect(resolved).toBe(true)
+  })
+})
+
+describe('flushAll', () => {
+  test('flushes every open tab, not just one path', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    edit('/workspace/a.md', 'X')
+    openTab('/workspace/b.md', 'v1', 'h1', '/workspace')
+    edit('/workspace/b.md', 'Y')
+    invokeMock.mockResolvedValue('hnew')
+
+    flushAll()
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(invokeMock).toHaveBeenCalledWith('document_write', {
+      path: '/workspace/a.md',
+      content: 'v1X',
+      expectedHash: 'h1',
+    })
+    expect(invokeMock).toHaveBeenCalledWith('document_write', {
+      path: '/workspace/b.md',
+      content: 'v1Y',
+      expectedHash: 'h1',
+    })
   })
 })

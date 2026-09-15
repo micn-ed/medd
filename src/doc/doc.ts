@@ -6,6 +6,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
+  allTabs,
   applyExternalContent,
   currentGeneration,
   getTab,
@@ -47,6 +48,11 @@ interface PathState {
   timer?: ReturnType<typeof setTimeout>
   writing?: boolean
   queued?: WriteRequest
+  /** Resolvers for `waitForQuiescence` calls made while this path still owed something. Checked
+   * (and, if the path has gone quiet, drained) every time a write settles — never only once —
+   * because `performWrite`'s own `finally` can immediately start a *new* write for a chained
+   * `queued` request, so a path that just finished writing is not necessarily done. */
+  waiters?: Array<() => void>
 }
 
 const pending = new Map<string, PathState>()
@@ -60,14 +66,53 @@ function stateFor(path: string): PathState {
   return state
 }
 
-/** Same class of session-lifetime growth as `generations` in tabs.svelte.ts and Rust's
- * `last_known` until `document_close` exists (architecture.md §8's drift ledger) — an entry is
- * only ever removed once there's nothing left in it, never proactively for a path that's gone
- * quiet. */
-function forgetIfIdle(path: string): void {
+function isQuiescent(path: string): boolean {
   const state = pending.get(path)
-  if (state && !state.timer && !state.writing && !state.queued) {
-    pending.delete(path)
+  return !state || (!state.timer && !state.writing && !state.queued)
+}
+
+/** Re-checked after every settle (see `PathState.waiters`), not just once — this is the one place
+ * that both frees a path's entry once nothing is left in it (same class of session-lifetime growth
+ * as `generations` in tabs.svelte.ts and Rust's `last_known` until `document_close` exists;
+ * architecture.md §8's drift ledger) and wakes anyone waiting for exactly that to become true. */
+function settleIfQuiescent(path: string): void {
+  if (!isQuiescent(path)) return
+  const waiters = pending.get(path)?.waiters
+  pending.delete(path)
+  waiters?.forEach((resolve) => resolve())
+}
+
+/** Resolves once `path` has nothing outstanding — no pending debounce timer, no write in flight,
+ * no write queued behind one. Two callers, by design (leader review): a caller about to
+ * `document_read` a path must not do so while a write for it is still airborne, or the read can
+ * land on disk *as it's about to change again* and hand back a baseline the very next settle makes
+ * stale (a reopen surfacing a conflict banner on a file the user just opened and has not edited,
+ * offering their own earlier text back as if it were someone else's change) — and a future
+ * quit/shutdown path needs to know every open document has actually reached disk before it lets
+ * the process exit. */
+export function waitForQuiescence(path: string): Promise<void> {
+  if (isQuiescent(path)) return Promise.resolve()
+  return new Promise((resolve) => {
+    const state = stateFor(path)
+    state.waiters = state.waiters ?? []
+    state.waiters.push(resolve)
+  })
+}
+
+/** The global form of `waitForQuiescence`, for a future quit/shutdown path: every path with
+ * anything outstanding, not just one. Paired with `flushAll` — flush first, so debounce timers
+ * that haven't fired yet actually start, then await this so the process doesn't exit mid-write. */
+export function waitForAllQuiescent(): Promise<void> {
+  return Promise.all(Array.from(pending.keys(), waitForQuiescence)).then(() => undefined)
+}
+
+/** `flushAutosave` for every currently open tab — the whole-app analogue `closeAllTabs` needs for
+ * itself internally (each tab flushed individually, via `setOnTabClosing`) and that a future quit
+ * path will need directly, since quitting doesn't otherwise go through `closeTab`/`closeAllTabs`
+ * at all. */
+export function flushAll(): void {
+  for (const tab of allTabs()) {
+    flushAutosave(tab.path)
   }
 }
 
@@ -188,7 +233,7 @@ async function performWrite(path: string, request: WriteRequest): Promise<void> 
         }
       }
     }
-    forgetIfIdle(path)
+    settleIfQuiescent(path)
   }
 }
 
