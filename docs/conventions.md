@@ -94,6 +94,25 @@ its real path, so the assertion held) and was killed by a test on the other side
 entirely. The property was covered; the map of what covered it was wrong. A mutant run narrowly
 would have reported a survivor and sent someone to write a test that already existed.
 
+**Redundant is not vacuous, and only one of them is a reason to delete.** A vacuous test passes in
+a world where the mechanism never runs. A redundant test fails correctly — it just fails alongside
+others that catch the same mutant. Conflating them argues away useful tests using an argument built
+for useless ones.
+
+The distinction that decides it is *form*. A case assertion says the output is a specific expected
+value; a **differential** assertion says the output is unchanged by some addition. The second does
+not need to know the right answer, only that something shouldn't move it — so it survives changes
+to the expected value, and adding the next variation to it is a small edit rather than a new
+expected-output test. That is worth keeping even when today it kills exactly the mutants the case
+tests kill.
+
+**But be honest about where the generality lives.** A differential test named for a *class* of
+routes, whose body exercises one route, is general in its **form and its name**, not in its
+mechanism — it will catch the next route when someone adds that route to it, and not before. A
+comment claiming otherwise is the same failure as a test name promising more than its assertion
+establishes, one level up. The honest version is still a good reason to keep it: *this is the named
+home for the class, and it makes the next instance cheap to cover.*
+
 **Ask it of specifications too, not only of code.** A test described in a plan can be vacuous
 before anyone writes it. This project's named deliverable for its one unverified path — launch,
 type a character, quit, check the file — passed against a quit flush that did nothing at all,
