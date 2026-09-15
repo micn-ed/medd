@@ -12,6 +12,12 @@
     onSelect: (path: string) => void
     onClose: (path: string) => void
   } = $props()
+
+  function tabTitle(tab: Tab): string | undefined {
+    if (tab.detached) return `${tab.path} — removed on disk`
+    if (tab.conflict) return `${tab.path} — changed on disk`
+    return tab.isLoose ? tab.path : undefined
+  }
 </script>
 
 <div class="tab-bar">
@@ -19,11 +25,13 @@
     <div class="tab" class:active={tab.path === activePath}>
       <button
         class="tab-select"
-        title={tab.isLoose ? tab.path : undefined}
+        title={tabTitle(tab)}
         onclick={() => onSelect(tab.path)}
       >
         {#if tab.isLoose}<span class="loose-marker" aria-hidden="true">◌</span>{/if}
         {tab.name}
+        {#if tab.detached}<span class="status-marker" aria-hidden="true">⚠</span>{/if}
+        {#if tab.conflict}<span class="status-marker" aria-hidden="true">●</span>{/if}
       </button>
       <button class="tab-close" onclick={() => onClose(tab.path)} aria-label="Close {tab.name}">
         ×
@@ -69,6 +77,12 @@
   .loose-marker {
     opacity: 0.6;
     margin-right: 0.3em;
+  }
+
+  .status-marker {
+    margin-left: 0.3em;
+    font-size: 0.8em;
+    color: var(--conflict-bg, #8a5a12);
   }
 
   .tab-close {

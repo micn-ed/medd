@@ -1,10 +1,9 @@
 //! Read, atomic write, content hashing, compare-and-swap (architecture.md §3).
 //!
 //! This is the single most dangerous module in the product: everything in it touches a real
-//! file someone cares about. `read()` is wired to `document_read` in increment 3; `write()` has
-//! no caller yet (no editing or autosave until increment 7) and is `#[allow(dead_code)]` down at
-//! its own definition rather than blanket-allowed for the module, since most of the module is
-//! genuinely reachable now.
+//! file someone cares about. `read()` is wired to `document_read` (increment 3); `write()` is
+//! wired to `document_write` and `check_external_change`/`is_tracked` back the watcher's own-
+//! write suppression (increment 7).
 
 use std::collections::HashMap;
 use std::fs;
@@ -75,9 +74,6 @@ impl DocumentStore {
     /// Compare-and-swap write (architecture.md §3): re-reads and re-hashes `path` first: a
     /// mismatch against `expected_hash` rejects the write with `Conflict` and touches nothing on
     /// disk. Otherwise writes atomically and records the new hash before the lock is released.
-    ///
-    /// No caller outside tests until increment 7 wires up autosave.
-    #[allow(dead_code)]
     pub fn write(
         &self,
         path: &Path,
@@ -104,6 +100,72 @@ impl DocumentStore {
         // `last_known` drops here, after the insert above: the new hash is recorded before the
         // lock is released.
     }
+
+    /// Whether `path` is a document medd is currently tracking (has been read or written at
+    /// least once and not since closed). Used by the watcher to decide whether a changed path
+    /// needs the hash-comparison dance below, or just folds into a generic `tree:changed`.
+    pub fn is_tracked(&self, path: &Path) -> bool {
+        self.last_known
+            .lock()
+            .unwrap()
+            .contains_key(&tracking_key(path))
+    }
+
+    /// Compares a watcher-reported `path` against the hash medd last recorded for it
+    /// (architecture.md §3). Returns `None` if `path` isn't tracked at all, *or* if it is and
+    /// the content matches — the own-write-echo case, which must be silent and is the common
+    /// one. Only a genuine external change or deletion produces `Some`.
+    ///
+    /// Deliberately does not require the caller to canonicalise first: a deleted path can no
+    /// longer be canonicalised (the syscall needs the target to exist), so this falls back to
+    /// treating the raw watcher-reported path as the tracking key when canonicalisation fails.
+    /// That's exactly right for the common case (no symlink in the middle of the watched tree,
+    /// where the raw path already equals what was canonicalised at open time) and is a known,
+    /// accepted gap for the rarer one (a tracked document reached through a mid-tree symlink
+    /// whose link — not target — gets deleted): see `tracking_key`.
+    pub fn check_external_change(&self, path: &Path) -> Option<ExternalChange> {
+        let key = tracking_key(path);
+        let mut last_known = self.last_known.lock().unwrap();
+        let known_hash = last_known.get(&key)?.clone();
+
+        match fs::read(&key) {
+            Ok(bytes) => {
+                let current_hash = ContentHash::of(&bytes);
+                if current_hash == known_hash {
+                    None // our own write, echoing back — the common case, and it must be cheap
+                } else {
+                    let content = String::from_utf8_lossy(&bytes).into_owned();
+                    last_known.insert(key, current_hash.clone());
+                    Some(ExternalChange::Changed {
+                        content,
+                        hash: current_hash,
+                    })
+                }
+            }
+            Err(_) => {
+                last_known.remove(&key);
+                Some(ExternalChange::Removed)
+            }
+        }
+    }
+}
+
+/// What a watcher-reported change to a *tracked* document turned out to be, once compared
+/// against the hash medd last recorded (architecture.md §3). Own-write echoes aren't a variant
+/// here at all — `check_external_change` returns `None` for those, so there's nothing for a
+/// caller to accidentally forget to ignore.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternalChange {
+    Changed { content: String, hash: ContentHash },
+    Removed,
+}
+
+/// The key `last_known` is tracked under for `path`: canonical when `path` still exists (the
+/// normal case, and what `read`/`write` themselves key by), falling back to `path` verbatim when
+/// it doesn't (a deletion — canonicalising requires the target to exist, so there is nothing
+/// left to resolve).
+fn tracking_key(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Resolves symlinks and relativity before anything touches disk. This is what makes writing
@@ -119,7 +181,6 @@ fn canonicalize(path: &Path) -> Result<PathBuf, MeddError> {
 /// Writes `content` to a temp file beside `target`, fsyncs it, copies `target`'s permissions
 /// onto it, then `rename()`s it over `target`. `target` must already exist (compare-and-swap
 /// always re-reads it first) and must already be canonical — callers within this module only.
-#[allow(dead_code)]
 fn atomic_write(target: &Path, content: &[u8]) -> Result<(), MeddError> {
     let dir = target.parent().ok_or_else(|| MeddError::Io {
         path: target.to_path_buf(),

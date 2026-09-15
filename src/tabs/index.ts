@@ -3,11 +3,20 @@ export {
   allTabs,
   activeTab,
   activeTabPath,
+  getTab,
   editorStateFor,
+  registerMountedView,
+  unregisterMountedView,
   openTab,
   closeTab,
   closeAllTabs,
   setActiveTab,
   setActiveTabViewMode,
+  setOnDocChanged,
+  markSynced,
+  markConflict,
+  markDetached,
+  applyExternalContent,
+  resolveConflictKeepMine,
 } from './tabs.svelte'
-export type { Tab, ViewMode } from './tabs.svelte'
+export type { Tab, ViewMode, Conflict } from './tabs.svelte'

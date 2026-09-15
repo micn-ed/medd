@@ -9,12 +9,19 @@
   // The seam that matters (architecture.md §2, D-12) still holds: `EditorState` is a CM6 type,
   // and this component and tabs.svelte.ts are the only two places allowed to know that — the
   // update callback baked into the state (extensions.ts) is what lets everything downstream
-  // (App.svelte, the render pipeline, autosave when it lands) deal in plain text only.
+  // (App.svelte, the render pipeline, autosave) deal in plain text only. `onMountedView` follows
+  // the same rule from the other direction: this component reports its view via a plain
+  // callback rather than importing tabs/ itself, so editor/ still doesn't know tabs/ exists —
+  // App.svelte, which already imports both, is what wires the two together (increment 7 needs
+  // the live view to apply an external-change reload directly, when one exists for the tab).
   import { onMount, onDestroy } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import type { EditorState } from '@codemirror/state'
 
-  let { state }: { state: EditorState } = $props()
+  let {
+    state,
+    onMountedView,
+  }: { state: EditorState; onMountedView?: (view: EditorView | null) => void } = $props()
 
   let container: HTMLDivElement
   let view: EditorView | undefined
@@ -22,10 +29,12 @@
   onMount(() => {
     view = new EditorView({ state, parent: container })
     view.focus()
+    onMountedView?.(view)
   })
 
   onDestroy(() => {
     view?.destroy()
+    onMountedView?.(null)
   })
 </script>
 

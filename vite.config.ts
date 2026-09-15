@@ -19,6 +19,9 @@ export default defineConfig(({ mode }) => ({
             '@tauri-apps/api/core': fileURLToPath(
               new URL('./src/harness/tauriMock.ts', import.meta.url),
             ),
+            '@tauri-apps/api/event': fileURLToPath(
+              new URL('./src/harness/eventMock.ts', import.meta.url),
+            ),
           },
         }
       : {},

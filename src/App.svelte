@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
+  import type { EditorView } from '@codemirror/view'
   import { Tree } from './tree'
   import { Editor } from './editor'
   import { Preview, dirname } from './render'
@@ -14,7 +15,12 @@
     closeAllTabs,
     setActiveTab,
     setActiveTabViewMode,
+    registerMountedView,
+    unregisterMountedView,
   } from './tabs'
+  import { ConflictBanner, initDocSync, reload, keepMine } from './doc'
+
+  initDocSync()
 
   interface WorkspaceInfo {
     root: string
@@ -64,10 +70,15 @@
     error = ''
     try {
       const result = await invoke<ReadResult>('document_read', { path })
-      openTab(path, result.content, workspaceRoot)
+      openTab(path, result.content, result.hash, workspaceRoot)
     } catch (e) {
       error = formatError(e)
     }
+  }
+
+  function onMountedView(path: string, view: EditorView | null) {
+    if (view) registerMountedView(path, view)
+    else unregisterMountedView(path)
   }
 </script>
 
@@ -99,6 +110,10 @@
           onSelect={setActiveTab}
           onClose={closeTab}
         />
+
+        {#if tab.conflict}
+          <ConflictBanner onReload={() => reload(tab.path)} onKeepMine={() => keepMine(tab.path)} />
+        {/if}
 
         <div class="toolbar">
           <p class="path">{tab.path}</p>
@@ -134,7 +149,10 @@
           <div class="split">
             <div class="editor-pane">
               {#key tab.path}
-                <Editor state={editorStateFor(tab.path)} />
+                <Editor
+                  state={editorStateFor(tab.path)}
+                  onMountedView={(view) => onMountedView(tab.path, view)}
+                />
               {/key}
             </div>
             <div class="preview-pane">
@@ -144,7 +162,10 @@
         {:else if tab.viewMode === 'source'}
           <div class="single-pane">
             {#key tab.path}
-              <Editor state={editorStateFor(tab.path)} />
+              <Editor
+                state={editorStateFor(tab.path)}
+                onMountedView={(view) => onMountedView(tab.path, view)}
+              />
             {/key}
           </div>
         {:else}

@@ -21,23 +21,23 @@ beforeEach(() => {
 
 describe('opening tabs', () => {
   test('opening two different paths creates two tabs, the second becomes active', () => {
-    openTab('/workspace/a.md', 'a', '/workspace')
-    openTab('/workspace/b.md', 'b', '/workspace')
+    openTab('/workspace/a.md', 'a', 'hash', '/workspace')
+    openTab('/workspace/b.md', 'b', 'hash', '/workspace')
 
     expect(allTabs().map((t) => t.path)).toEqual(['/workspace/a.md', '/workspace/b.md'])
     expect(activeTabPath()).toBe('/workspace/b.md')
   })
 
   test('reopening an already-open path switches to it without resetting or duplicating', () => {
-    openTab('/workspace/a.md', 'original content', '/workspace')
-    openTab('/workspace/b.md', 'b', '/workspace')
+    openTab('/workspace/a.md', 'original content', 'hash', '/workspace')
+    openTab('/workspace/b.md', 'b', 'hash', '/workspace')
 
     // Simulate an in-progress edit on tab a before it's revisited.
     const view = new EditorView({ state: editorStateFor('/workspace/a.md') })
     view.dispatch({ changes: { from: 0, insert: 'EDITED ' } })
     view.destroy()
 
-    openTab('/workspace/a.md', 'original content', '/workspace')
+    openTab('/workspace/a.md', 'original content', 'hash', '/workspace')
 
     expect(allTabs()).toHaveLength(2)
     expect(activeTabPath()).toBe('/workspace/a.md')
@@ -45,26 +45,26 @@ describe('opening tabs', () => {
   })
 
   test('a workspace-relative path is named by its basename', () => {
-    openTab('/workspace/notes/todo.md', 'x', '/workspace')
+    openTab('/workspace/notes/todo.md', 'x', 'hash', '/workspace')
     expect(activeTab()?.name).toBe('todo.md')
     expect(activeTab()?.isLoose).toBe(false)
   })
 
   test('a loose path (D-15) is named by its parent directory plus basename', () => {
-    openTab('/Users/me/Downloads/report.md', 'x', '/workspace')
+    openTab('/Users/me/Downloads/report.md', 'x', 'hash', '/workspace')
     expect(activeTab()?.name).toBe('Downloads/report.md')
     expect(activeTab()?.isLoose).toBe(true)
   })
 
   test('a path is loose when no workspace is open at all', () => {
-    openTab('/Users/me/notes.md', 'x', null)
+    openTab('/Users/me/notes.md', 'x', 'hash', null)
     expect(activeTab()?.isLoose).toBe(true)
   })
 })
 
 describe('closing tabs (P-2: always safe, never prompts)', () => {
   test('closing a tab removes it and frees its retained state', () => {
-    openTab('/workspace/a.md', 'a', '/workspace')
+    openTab('/workspace/a.md', 'a', 'hash', '/workspace')
     closeTab('/workspace/a.md')
 
     expect(allTabs()).toHaveLength(0)
@@ -72,9 +72,9 @@ describe('closing tabs (P-2: always safe, never prompts)', () => {
   })
 
   test('closing the active tab falls back to the next remaining tab', () => {
-    openTab('/workspace/a.md', 'a', '/workspace')
-    openTab('/workspace/b.md', 'b', '/workspace')
-    openTab('/workspace/c.md', 'c', '/workspace')
+    openTab('/workspace/a.md', 'a', 'hash', '/workspace')
+    openTab('/workspace/b.md', 'b', 'hash', '/workspace')
+    openTab('/workspace/c.md', 'c', 'hash', '/workspace')
     setActiveTab('/workspace/b.md')
 
     closeTab('/workspace/b.md')
@@ -83,8 +83,8 @@ describe('closing tabs (P-2: always safe, never prompts)', () => {
   })
 
   test('closing the last tab falls back to the previous one', () => {
-    openTab('/workspace/a.md', 'a', '/workspace')
-    openTab('/workspace/b.md', 'b', '/workspace')
+    openTab('/workspace/a.md', 'a', 'hash', '/workspace')
+    openTab('/workspace/b.md', 'b', 'hash', '/workspace')
 
     closeTab('/workspace/b.md')
 
@@ -92,14 +92,14 @@ describe('closing tabs (P-2: always safe, never prompts)', () => {
   })
 
   test('closing the only tab leaves nothing active', () => {
-    openTab('/workspace/a.md', 'a', '/workspace')
+    openTab('/workspace/a.md', 'a', 'hash', '/workspace')
     closeTab('/workspace/a.md')
     expect(activeTabPath()).toBeNull()
   })
 
   test('closing an inactive tab does not disturb the active one', () => {
-    openTab('/workspace/a.md', 'a', '/workspace')
-    openTab('/workspace/b.md', 'b', '/workspace')
+    openTab('/workspace/a.md', 'a', 'hash', '/workspace')
+    openTab('/workspace/b.md', 'b', 'hash', '/workspace')
     closeTab('/workspace/a.md')
     expect(activeTabPath()).toBe('/workspace/b.md')
   })
@@ -107,8 +107,8 @@ describe('closing tabs (P-2: always safe, never prompts)', () => {
 
 describe('per-tab view mode', () => {
   test('defaults to split and only affects the active tab', () => {
-    openTab('/workspace/a.md', 'a', '/workspace')
-    openTab('/workspace/b.md', 'b', '/workspace')
+    openTab('/workspace/a.md', 'a', 'hash', '/workspace')
+    openTab('/workspace/b.md', 'b', 'hash', '/workspace')
     expect(activeTab()?.viewMode).toBe('split')
 
     setActiveTabViewMode('reading')
@@ -121,7 +121,7 @@ describe('per-tab view mode', () => {
 
 describe('undo history survives a tab switch (the point of retaining EditorState)', () => {
   test('editing, switching away, and switching back preserves both content and undo', () => {
-    openTab('/workspace/a.md', 'original', '/workspace')
+    openTab('/workspace/a.md', 'original', 'hash', '/workspace')
 
     // A real EditorView, mounted against the tab's retained state — this is what "switching to
     // this tab" looks like in the app. Typing goes through the view's dispatch cycle, which is

@@ -12,7 +12,8 @@
 // plan-v0.1.md increment 12.
 //
 // Activated only by `npm run harness` (vite --mode harness), which aliases '@tauri-apps/api/core'
-// to this file. Nothing here is reachable from a production build.
+// to this file (and '@tauri-apps/api/event' to eventMock.ts, for the same reason but a different
+// import path — see that file's header). Nothing here is reachable from a production build.
 
 import { DIRS, FILES, ROOT } from './fixture'
 
@@ -55,6 +56,19 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
       const file = FILES[path]
       if (!file) throw new Error(`harness: no such file: ${path}`)
       return { content: file.content, hash: hashOf(file.content) } as unknown as T
+    }
+
+    case 'document_write': {
+      const path = String(args?.path)
+      const file = FILES[path]
+      if (!file) throw new Error(`harness: no such file: ${path}`)
+      // No real compare-and-swap here: the harness always accepts the write and updates the
+      // in-memory fixture, so autosave is visually demonstrable (edit, wait, the content is now
+      // "on disk" for the session). There is no foreign writer that could ever produce a genuine
+      // conflict in the harness — that path is exercised by the Rust and fake-timer suites, not
+      // by looking at this.
+      file.content = String(args?.content)
+      return hashOf(file.content) as unknown as T
     }
 
     case 'open_external':

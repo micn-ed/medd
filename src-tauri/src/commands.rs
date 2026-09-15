@@ -12,6 +12,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::document::{ContentHash, DocumentStore};
 use crate::error::MeddError;
+use crate::watcher::FsWatcher;
 use crate::workspace::{PathClass, TreeEntry, Workspace};
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,17 +36,18 @@ pub fn workspace_pick(app: tauri::AppHandle) -> Option<PathBuf> {
     file_path.into_path().ok()
 }
 
-/// Sets the workspace root, replacing whatever was open before. No watching yet — `watcher.rs`
-/// is increment 7.
+/// Sets the workspace root, replacing whatever was open before.
 ///
 /// Scopes the asset protocol to the new root and revokes it from the old one (plan-v0.1.md §5):
 /// "nothing wider" means the allow-list should track the *current* workspace, not accumulate
-/// every workspace opened in a session.
+/// every workspace opened in a session. Starts watching the new root recursively (architecture.md
+/// §6) and stops watching the old one, for the same reason.
 #[tauri::command]
 pub fn workspace_open(
     app: AppHandle,
     path: PathBuf,
     workspace: State<'_, Mutex<Option<Workspace>>>,
+    watcher: State<'_, Mutex<FsWatcher>>,
 ) -> Result<WorkspaceInfo, MeddError> {
     let ws = Workspace::open(&path)?;
     let info = WorkspaceInfo {
@@ -59,10 +61,13 @@ pub fn workspace_open(
 
     let mut guard = workspace.lock().unwrap();
     let scope = app.asset_protocol_scope();
+    let mut fs_watcher = watcher.lock().unwrap();
     if let Some(previous) = guard.as_ref() {
         let _ = scope.forbid_directory(previous.root(), true);
+        fs_watcher.unwatch(previous.root());
     }
     let _ = scope.allow_directory(ws.root(), true);
+    let _ = fs_watcher.watch_recursive(ws.root());
 
     *guard = Some(ws);
     Ok(info)
@@ -83,20 +88,22 @@ pub fn dir_list(
     ws.dir_list(&path)
 }
 
-/// Opens a document; begins tracking it for the compare-and-swap write path that lands in
-/// increment 7.
+/// Opens a document; begins tracking it for the compare-and-swap write path (`document_write`,
+/// below).
 ///
 /// If the path is loose (D-15: outside the open workspace, or no workspace open at all) and a
 /// workspace *is* open, scopes the asset protocol to that document's own directory so its
-/// relative images can resolve — root-relative documents need no extra scoping, since the whole
-/// workspace root was already scoped by `workspace_open`. This is the first real caller of
-/// `Workspace::classify`, which has sat tested-but-unused since increment 3.
+/// relative images can resolve, and starts a non-recursive watch on that same directory
+/// (architecture.md §6) — root-relative documents need neither: the whole workspace root is
+/// already scoped and watched by `workspace_open`. This is the first real caller of
+/// `Workspace::classify`, which sat tested-but-unused from increment 3 to increment 5.
 #[tauri::command]
 pub fn document_read(
     app: AppHandle,
     path: PathBuf,
     store: State<'_, DocumentStore>,
     workspace: State<'_, Mutex<Option<Workspace>>>,
+    watcher: State<'_, Mutex<FsWatcher>>,
 ) -> Result<ReadResult, MeddError> {
     let (content, hash) = store.read(&path)?;
 
@@ -105,12 +112,27 @@ pub fn document_read(
             if let Ok(canonical) = path.canonicalize() {
                 if let Some(dir) = canonical.parent() {
                     let _ = app.asset_protocol_scope().allow_directory(dir, false);
+                    let _ = watcher.lock().unwrap().watch_non_recursive(dir);
                 }
             }
         }
     }
 
     Ok(ReadResult { content, hash })
+}
+
+/// Compare-and-swap write (architecture.md §3), called by the frontend's autosave debounce
+/// (`doc/`, plan-v0.1.md increment 7). A thin wrapper — every actual safety property (atomicity,
+/// the hash re-check, recording the new hash before the write's own watcher event can arrive)
+/// lives in `DocumentStore::write`, tested independently of any command since increment 2.
+#[tauri::command]
+pub fn document_write(
+    path: PathBuf,
+    content: String,
+    expected_hash: ContentHash,
+    store: State<'_, DocumentStore>,
+) -> Result<ContentHash, MeddError> {
+    store.write(&path, &content, &expected_hash)
 }
 
 /// Hands an http(s) link to the system browser (R-6). Calls the opener plugin's Rust API
