@@ -260,6 +260,30 @@ once it is competing with a convincing wrong answer.
 
 ---
 
+## When two places must agree, test the agreement — not the answer
+
+Where the same question is answered in two places and the *right* answer hasn't been decided yet,
+write a test asserting only that **the two agree**, with no opinion about which way. It goes green
+whenever both sides say the same thing, so it never needs inverting when the decision lands. That
+makes it the right instrument in the case where the detector is ready before the ruling — which is
+common, because noticing a disagreement is easy and resolving it is a product call.
+
+Concretely here: the file tree follows directory symlinks and the quick-open walk does not, so a
+symlinked directory of notes is visible in the sidebar and absent from search. The test asserts the
+two enumerations agree; it deliberately does not encode whether a symlinked directory belongs to
+the workspace.
+
+**Where it lives:** with the consumer that was added *later* — that's the side that can drift from
+an already-established answer.
+
+**And the test is the detector, not the fix.** A disagreement between two places holding the same
+knowledge is structural, and this project's own answer to it is a shared predicate — `is_markdown`
+and `is_ignored_name` both exist so their question cannot be answered twice. An agreement test
+holds the line until the predicate exists, and should become redundant-but-cheap afterwards rather
+than remaining load-bearing. If it stays load-bearing, the underlying duplication was never fixed.
+
+---
+
 ## A negative claim is only worth its search
 
 "No reversed lock order found", "no other instance of this bug", "nothing else depends on that" —
