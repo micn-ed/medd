@@ -12,6 +12,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::document::{ContentHash, DocumentStore};
 use crate::error::MeddError;
+use crate::quickopen::{FileIndex, QuickOpenEntry};
 use crate::quit::QuitCoordinator;
 use crate::watcher::FsWatcher;
 use crate::workspace::{PathClass, TreeEntry, Workspace};
@@ -134,6 +135,24 @@ pub fn document_write(
     store: State<'_, DocumentStore>,
 ) -> Result<ContentHash, MeddError> {
     store.write(&path, &content, &expected_hash)
+}
+
+/// Every `.md` file in the open workspace, for quick-open (Cmd+P, plan-v0.1.md increment 9, W-5).
+/// Deliberately the one command that walks the whole tree — `dir_list` stays one-level-at-a-time
+/// for N-2. Safe to call from a fresh app because it's a plain (non-`async`) command: Tauri runs
+/// it off the main thread, so even an uncached first walk can't block the dialog opening, and
+/// `FileIndex` caches the result per workspace root so repeat calls are cheap.
+#[tauri::command]
+pub fn quick_open_files(
+    workspace: State<'_, Mutex<Option<Workspace>>>,
+    index: State<'_, FileIndex>,
+) -> Result<Vec<QuickOpenEntry>, MeddError> {
+    let guard = workspace.lock().unwrap();
+    let ws = guard.as_ref().ok_or_else(|| MeddError::Io {
+        path: PathBuf::new(),
+        message: "no workspace open".to_string(),
+    })?;
+    Ok(index.files(ws.root()))
 }
 
 /// Hands an http(s) link to the system browser (R-6). Calls the opener plugin's Rust API
