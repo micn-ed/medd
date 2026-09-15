@@ -51,11 +51,30 @@
 
   let workspaceRoot = $state<string | null>(null)
   let workspaceName = $state('')
-  let sidebarCollapsed = $state(false)
+  // The user's own answer to "is the file tree useful to me right now?" (W-3) — workspace-level,
+  // durable, and written ONLY by the sidebar toggle below. Never assign to this from anywhere
+  // else: reading mode used to (`sidebarCollapsed = true`) and nothing ever unset it, which is
+  // what made a stale collapse look like "the user's choice" long after they'd switched tabs.
+  // Named for what it is (a stored preference) rather than for what's on screen, on purpose —
+  // architecture.md §5's pattern: when two inputs determine a presentational fact, store the
+  // inputs and derive the fact, because a name that reads like live state invites exactly this bug.
+  let sidebarHiddenByUser = $state(false)
   let error = $state('')
 
   let tab = $derived(activeTab())
   let documentDir = $derived(tab ? dirname(tab.path) : '')
+  // Q2 (per-document: "should this be distraction-free?") is allowed to hide the sidebar, but only
+  // by *participating in the derivation* — never by overwriting Q1 (the toggle's own answer,
+  // above). Leaving reading mode, or switching to a tab that isn't in it, restores the sidebar
+  // with nothing having to remember to undo anything.
+  let sidebarVisible = $derived(
+    workspaceRoot !== null && !sidebarHiddenByUser && tab?.viewMode !== 'reading',
+  )
+  // The toggle itself is absent, not disabled, while the active tab is in reading mode: under a
+  // derived visibility it would flip `sidebarHiddenByUser` and nothing on screen would change,
+  // and a control that's present, enabled and does nothing reads as broken. Reading mode already
+  // has this precedent — it hides the editor pane, and there is no inert "show editor" button.
+  let showSidebarToggle = $derived(workspaceRoot !== null && tab?.viewMode !== 'reading')
 
   function formatError(e: unknown): string {
     if (e && typeof e === 'object' && 'kind' in e) {
@@ -117,15 +136,17 @@
   <header>
     <button onclick={pickFolder}>Open Folder…</button>
     {#if workspaceRoot}
-      <button onclick={() => (sidebarCollapsed = !sidebarCollapsed)}>
-        {sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-      </button>
+      {#if showSidebarToggle}
+        <button onclick={() => (sidebarHiddenByUser = !sidebarHiddenByUser)}>
+          {sidebarHiddenByUser ? 'Show sidebar' : 'Hide sidebar'}
+        </button>
+      {/if}
       <span class="workspace-name">{workspaceName}</span>
     {/if}
   </header>
 
   <div class="body">
-    {#if workspaceRoot && !sidebarCollapsed}
+    {#if sidebarVisible && workspaceRoot}
       <nav class="sidebar">
         <Tree path={workspaceRoot} onOpenFile={openFile} />
       </nav>
@@ -166,10 +187,7 @@
             <button
               class:active={tab.viewMode === 'reading'}
               aria-pressed={tab.viewMode === 'reading'}
-              onclick={() => {
-                setActiveTabViewMode('reading')
-                sidebarCollapsed = true
-              }}
+              onclick={() => setActiveTabViewMode('reading')}
             >
               Reading
             </button>
