@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::MeddError;
+use crate::workspace::is_markdown;
 
 /// The hash of a document's content, as medd last saw it on disk. Compared by value, never
 /// parsed or interpreted — it exists to answer one question: "is what's on disk now what I
@@ -286,9 +287,9 @@ fn target_of_temp(name: &str) -> Option<&str> {
 
 /// Removes abandoned staging files from `dir`, returning the paths it removed.
 ///
-/// **Invariant: a staging file is removed only if no process holds its lock and its target
-/// document exists in the same directory.** Both halves are load-bearing and neither is a proxy
-/// for the other:
+/// **Invariant: a staging file is removed only if no process holds its lock, its target names a
+/// Markdown document, and that document exists in the same directory.** All three are load-bearing
+/// and none is a proxy for another:
 ///
 /// - **Nobody holds its lock.** `atomic_write` holds an exclusive advisory lock on the staging
 ///   file from before it writes a byte until after the rename, so a lock that cannot be acquired
@@ -297,17 +298,21 @@ fn target_of_temp(name: &str) -> Option<&str> {
 ///   "acquirable" is exactly "the writer is gone", answered directly rather than inferred from a
 ///   timestamp or a process id. A recycled pid would have made us skip a file permanently; a
 ///   released lock cannot.
+/// - **The target names a Markdown document.** `document_write` is only ever called for an open
+///   document, and non-`.md` files are visible but inert in the tree (W-8), so medd's own litter
+///   always has a `.md` target. **If medd ever gains the ability to edit other file types, this
+///   guard silently stops sweeping their staging files** — it fails safe, leaving litter rather
+///   than deleting wrongly, but whoever adds that support has to widen it. The predicate is
+///   `workspace::is_markdown`, shared with the tree's own classification so the two cannot drift.
 /// - **The target document exists.** medd's own litter always has its target present: the litter
 ///   exists *because* the rename never happened, which leaves the original untouched. A staging
 ///   file with no corresponding document is therefore not ours, whatever it is named, and is left
 ///   alone.
 ///
 /// Residual risk, stated rather than assumed away: a file a *user* happened to name
-/// `.medd-<something>.tmp`, sitting beside a file named `<something>`, would match both guards and
-/// be removed. There is no way to distinguish it, medd cannot open it (the tree hides dotfiles),
-/// and the name is specific enough that this is accepted rather than guarded further — a `.md`-only
-/// guard would be a guess about future scope that silently stops sweeping the day medd edits
-/// anything else.
+/// `.medd-notes.md.tmp`, sitting beside a real `notes.md`, would match all three guards and be
+/// removed. There is no way to distinguish it and medd cannot open it (the tree hides dotfiles);
+/// the name is specific enough that this is accepted rather than guarded further.
 ///
 /// Never fails: the write that triggered this has already succeeded, and a cleanup problem must
 /// not be reported as a write problem. An unreadable directory, or a file that will not unlink,
@@ -324,6 +329,9 @@ pub fn sweep_abandoned_temps(dir: &Path) -> Vec<PathBuf> {
         let Some(target) = target_of_temp(name) else {
             continue;
         };
+        if !is_markdown(target) {
+            continue; // not medd's litter: medd only ever writes Markdown documents
+        }
         if !dir.join(target).exists() {
             continue; // not medd's litter: our own always has its target present
         }
@@ -735,6 +743,45 @@ mod tests {
         // And once the holder is gone — which is what a crashed writer looks like to the kernel —
         // the same file is swept.
         assert_eq!(sweep_abandoned_temps(dir.path()), vec![in_flight]);
+    }
+
+    #[test]
+    fn leaves_a_staging_file_whose_target_is_not_markdown() {
+        // medd only ever writes Markdown documents, so a staging file for anything else was not
+        // created by medd — even if something by that name happens to sit beside it.
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("photo.png"), "not a document medd writes").unwrap();
+        let stray = dir.path().join(temp_file_name("photo.png"));
+        fs::write(&stray, "someone else's staging file").unwrap();
+
+        let removed = sweep_abandoned_temps(dir.path());
+
+        assert!(removed.is_empty());
+        assert!(stray.exists());
+    }
+
+    #[test]
+    fn the_sweep_and_the_tree_agree_on_what_markdown_is() {
+        // The guard above and `dir_list`'s `EntryKind::Markdown` are the same question asked from
+        // two directions. They share one predicate precisely so they cannot drift; this pins that
+        // they do, including the case-insensitivity the tree already had.
+        let dir = tempdir().unwrap();
+        for name in ["note.md", "SHOUTING.MD", "MiXeD.Md"] {
+            fs::write(dir.path().join(name), "doc").unwrap();
+            fs::write(dir.path().join(temp_file_name(name)), "litter").unwrap();
+        }
+
+        let mut removed = sweep_abandoned_temps(dir.path());
+        removed.sort();
+        let mut expected: Vec<_> = ["note.md", "SHOUTING.MD", "MiXeD.Md"]
+            .iter()
+            .map(|n| dir.path().join(temp_file_name(n)))
+            .collect();
+        expected.sort();
+        assert_eq!(
+            removed, expected,
+            "the sweep must sweep exactly what the tree calls Markdown"
+        );
     }
 
     #[test]
