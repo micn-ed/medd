@@ -321,11 +321,35 @@ Deliberately late: the fiddliest platform work, and nothing above depends on it.
   `route_open` suite is exactly what *covering one is indistinguishable from covering all* looks
   like — it tests the one part of this subsystem that has never been broken.
 
-  The criterion: **for each listener, break only that listener's call into the router, and confirm
-  exactly one test fails, and that it is the test named for that listener.** Zero failures means
-  that listener is untested whatever coverage reports. Failures named for a *different* listener
-  mean the tests do not distinguish the routes. The `route_open` unit tests are still worth having;
-  they are simply not evidence about the thing that keeps breaking.
+  **The criterion is two claims, not one, and an earlier version of this section conflated them.**
+
+  **(a) Per-listener *shaping* is unit-verified.** Each listener's path extraction is a named,
+  Tauri-free function — `paths_from_argv(&[String], &Path) -> Vec<PathBuf>`,
+  `paths_from_urls(&[Url]) -> Vec<PathBuf>` — with the closure reduced to one line calling it.
+  Then: **break only that listener's extraction and confirm exactly one test fails, named for that
+  listener.** This catches the `argv[0]` bug, the missing `file:` filter, and relative-path
+  resolution, each distinguishably. It requires the extraction to exist, or the criterion has
+  nothing to bite on.
+
+  **(b) Per-listener *hook choice* is gesture-verified, and one gesture is deferred.** Which
+  platform event a listener registers for cannot be reached by any unit test. `MockRuntime::run`
+  emits only `Ready`, `WindowEvent{CloseRequested}`, `ExitRequested`, `MainEventsCleared` and
+  `Exit` — never `Opened` or `Reopen`, which are macOS delegate-driven — and the single-instance
+  callback is invoked by the plugin's socket listener rather than the runtime. So hook choice needs
+  a real gesture per listener. **`RunEvent::Opened`'s hook correctness is unverifiable in v0.1**,
+  because it cannot fire without `CFBundleDocumentTypes`, which is v0.2. State that rather than
+  leave it implied: the handler is written, its shaping is tested, and whether the event ever
+  arrives is a v0.2 question.
+
+  **Why the split matters more than being precise.** The earlier single criterion could not catch
+  either of the two bugs it was written for — both were about *which hook was chosen*, which lives
+  in registration code no test reaches, while the criterion covers route *shaping*. A criterion
+  that appears to guard the thing that keeps breaking is worse than none, because it **retires the
+  question**: the same failure as `own_write_produces_no_notification`, which asserted something
+  true and adjacent while the behaviour it was named for was broken.
+
+  The `route_open` unit tests are still worth having; they are simply not evidence about hook
+  choice.
 - **`route_open` takes owned paths and returns a decision for the caller to act on.** "It must not
   block" has no observable and no threshold, so as a requirement it cannot fail — the same shape as
   §9's dialog bullet before it was split. But unlike that one it has a structural answer, because
