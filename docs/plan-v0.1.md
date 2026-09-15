@@ -257,10 +257,15 @@ The watcher exists in v0.1 anyway because P-3 needs it.
 **Goal.** `medd <file>`, `medd <folder>`, bare `medd`, converging on one process (L-2, I-1).
 Deliberately late: the fiddliest platform work, and nothing above depends on it.
 
-- `tauri-plugin-single-instance`, socket path derived from a **fixed, stable location** under the
-  application support directory — computed identically by the app and the shim, never from the
-  invoking binary's own location. This is the invariant.
-- `routing.rs`: `route_open(paths)` — canonicalise, classify, dispatch. Handles both listeners.
+- `tauri-plugin-single-instance`. **The socket path is the plugin's, not medd's** — it hardcodes
+  `/tmp/<identifier>_si.sock` with no configuration hook, so it derives from `config.identifier`,
+  a compile-time constant. Do not compute a path anywhere: the invariant that matters (it depends
+  on nothing about the invoking binary's location, so the shim and the bundle never need to agree
+  on where the other lives) is already satisfied by the plugin. An earlier version of this plan
+  named a location under Application Support, which nothing ever binds.
+- `routing.rs`: `route_open(paths)` — canonicalise, classify, dispatch. **Routing and activation
+  are separate**: `route_open` handles the two listeners that carry documents, and `activate()` is
+  called by all three. `RunEvent::Reopen` carries no paths and never enters the router.
 - `RunEvent::Opened` wired now even though Finder registration is v0.2, so adding the file
   association later is a manifest change rather than an architectural one.
 - **The pending-open buffer.** `RunEvent::Opened` can fire before the WebView has attached its
@@ -276,19 +281,42 @@ Deliberately late: the fiddliest platform work, and nothing above depends on it.
 - Activation is verified in **three named states with predicted outcomes** — occluded, minimised,
   hidden — using `is_focused()` to assert rather than eyeball. Only the occluded case is expected
   to remain unreliable. See the known limitation below.
-- `scripts/medd` shim: if the socket accepts a connection, exec the bundle binary so the plugin's
-  own client forwards `argv`; otherwise `open -a` so Launch Services starts it detached from the
-  terminal. Resolve relative paths to absolute before handing them on — the running instance's
-  working directory is not the user's.
+- `scripts/medd` shim: **one path, no probe.** Always exec the bundle binary
+  (`medd.app/Contents/MacOS/medd`) with the user's arguments and let the plugin make the warm/cold
+  decision itself — it already does so correctly, atomically and exactly once. Do not probe the
+  socket first: a bare connect-and-close makes the primary read zero bytes, which becomes an empty
+  argument list, **which fires the primary's open callback**.
+- **Detachment is not optional.** Launch with `nohup … &` or equivalent. Measured on a real bundle:
+  executing the binary directly gives correct bundle identity and `type="Foreground"`, and with
+  detachment the process reparents to `launchd` and outlives its terminal — without it, the
+  cold-launch case dies with the shell, which is the failure `open -a` originally prevented.
+  Dropping `open -a` silently drops that property unless it is deliberately restored.
+- Resolve relative paths to absolute before handing them on — the running instance's working
+  directory is not the user's.
+- `medd <nonexistent-file>` **errors**; it does not create. See architecture.md §9 for why, and
+  note the error must not use a surface that replaces the tab UI.
 - `make install-cli` symlinks the shim. Homebrew is deferred.
 
-**Known limitation, by design.** `set_focus()` is unreliable on macOS —
-`NSRunningApplication.activateWithOptions` has been flaky since Big Sur and is deprecated as of
-Sonoma, with two open upstream Tauri issues tracing to it (one closed *not planned*). No IPC
-choice fixes this. medd's posture: **the file opens as a tab whether or not the window comes
-forward.** Nothing may assume the window is frontmost after a routed open. Spot-test early against
-real window states — the reported failure is specific to `hide()`-style states, and medd may never
-enter one.
+**Known limitation, by design — and only in one of three states.** An earlier version of this
+paragraph called `set_focus()` uniformly unreliable and said the failure was specific to
+`hide()`-style states "which medd may never enter". Both halves were wrong, and the framing would
+have let a deterministic skip ship as an accepted platform cost.
+
+- **Occluded** — genuinely unreliable. `activateIgnoringOtherApps:` has been flaky since Big Sur
+  and is deprecated as of Sonoma; two upstream Tauri issues trace to it, one closed *not planned*.
+  No IPC choice fixes this, and this is the real limitation.
+- **Minimised** — *fixable*, and fixed by `unminimize()`. `tao` guards `set_focus()` behind
+  `isMiniaturized()`, so without it the call is skipped entirely and returns success.
+- **Hidden** — probably fixable by `show()`; to be measured. Cmd+H is `[NSApp hide:]`, which hides
+  the *application*, and a window-level call may not clear an application-level flag. If `show()`
+  is insufficient the choice is an `objc2` call to `unhide:` or accepting it — decided against a
+  measurement, not in advance.
+
+medd never enters a hidden state only if medd never ships the menu item — and it does: Tauri's
+`Menu::default` puts **Cmd+H** and **Cmd+M** under medd's own application menu.
+
+For the occluded case the posture stands: **the file opens as a tab whether or not the window comes
+forward**, and nothing may assume the window is frontmost after a routed open.
 
 ---
 
@@ -322,7 +350,7 @@ safe, and are therefore queued rather than blocking — but none of them ship br
 | 3 | A write settling after a conflict resolution clobbers the resolved state | Produces a conflict banner that no user edit caused — D-11's own named fatal failure. Needs a per-tab generation counter captured before the await. |
 | 4 | `detached` is a terminal, invisible state | A deleted file silently stops autosaving forever, with nothing on screen and no recovery — a recreated file comes back untracked. `git checkout` across branches does exactly this. |
 | 5 | Any read failure is reported as deletion | `EACCES`/`EIO`/`EMFILE` — the last most likely during the filesystem storms that generate watcher traffic — all latch a tab into finding 4's state. Only `NotFound` should mean removed. |
-| 6 | A non-UTF-8 external change is lossily converted, and the CAS lets medd write it back | `read()` refuses non-UTF-8 but `check_external_change` uses `from_utf8_lossy`, and the hash is of the raw bytes — so a later autosave passes CAS and writes replacement characters over the file's real content. |
+| 6 | A non-UTF-8 external change is lossily converted, and the CAS lets medd write it back | `read()` refuses non-UTF-8 but `check_external_change` uses `from_utf8_lossy`, and the hash is of the raw bytes — so a later autosave passes CAS and writes replacement characters over the file's real content. **The line-ending fix now inherits this exposure:** detection in `read()` only ever sees valid UTF-8, but in `check_external_change` it runs on lossy output. A UTF-16LE document — an ordinary way for a `.md` to arrive from Windows — decodes to `\r\0\n\0` per break, so no `\r\n` is found, the lone-`\r` and lone-`\n` counts tie, a CRLF file is detected as LF, and the next write rewrites every line ending. 6's ruled fix closes this completely, since the content never reaches detection. |
 | — | `document_close` is specified in architecture.md §4 and does not exist | `last_known` grows for the session, loose-document watches are never released, and asset-protocol grants are never revoked. |
 
 **Cmd+W quits medd, and quitting loses every pending edit.** Sequenced after the current fix

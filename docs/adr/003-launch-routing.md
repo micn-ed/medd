@@ -67,7 +67,24 @@ Pairing it with a lock file to answer that erases its simplicity advantage.
 
 **Rejected: lock file plus localhost TCP** — works and is more portable, but a TCP port is one more
 thing to collide with local dev servers and to explain to a firewall, for IPC semantics a Unix
-socket already provides with filesystem-scoped naming and permissions.
+socket already provides with filesystem-scoped naming.
+
+**A qualification this rejection originally overstated.** "Filesystem-scoped naming *and
+permissions*" is fair for a socket under Application Support. The plugin's socket lives in `/tmp`,
+which is world-writable with the sticky bit, so the permissions half of that claim does not hold
+here. Two consequences follow, both recorded as accepted rather than fixed:
+
+- A process that binds `/tmp/com_micned_medd_si.sock` first makes medd's own singleton check
+  *succeed*, so medd exits immediately and never starts.
+- That process also receives the working directory and full `argv` of every invocation — which
+  leaks the paths the user is working on.
+
+Both require a local process already running as the user, and the path belongs to the plugin, so
+moving it would split the shim from the thing that actually binds. Upstream chose `/tmp`
+deliberately and says why in its own source: `sun_path` is about 104 bytes on macOS and `$TMPDIR` —
+which *is* per-user, and would have given isolation — does not fit. **Recording that reason is the
+point**: without it, someone later "fixes" this by pointing medd at a better path and silently
+breaks the agreement between the shim and the app.
 
 **Rejected: `open -a Medd --args <path>` as the primary channel** — `open`'s argument passing to an
 *already running* app is inconsistent by design (it is a launch mechanism, not an IPC one), and it

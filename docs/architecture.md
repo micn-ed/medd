@@ -183,7 +183,14 @@ learns line endings exist.** `document_read` detects the document's dominant con
 raw bytes and hands back LF-only content; `document_write` restores that convention immediately
 before the bytes touch disk, and hashes what was actually written, not what the frontend sent. The
 convention is re-detected on every read, so a file whose ending changes externally (a `git
-checkout` flipping `text=auto`) is picked up rather than remembered stale. Only two conventions
+checkout` flipping `text=auto`) is picked up rather than remembered stale.
+
+**`check_external_change` normalises too, and naming it is not redundant.** It is the path the
+corruption was actually found through: `document:changed-on-disk` delivered raw CRLF into a diff
+against an LF buffer, and neither `document_read` nor `document_write` was ever involved. A
+specification naming only read and write is narrower than the fix it describes, and anyone
+implementing from it would leave the watcher path out — breaking the invariant on precisely the
+path it was written to protect. Only two conventions
 exist — LF and CRLF — and a lone `\r` (classic Mac-era files) folds into LF at detection time
 rather than being given a third representation. A file with mixed endings is, as a documented
 consequence rather than a bug, fully normalised to its dominant convention by its *first* write
