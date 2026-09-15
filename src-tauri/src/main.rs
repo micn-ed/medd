@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 
+mod atomic;
 mod commands;
 mod document;
 mod error;

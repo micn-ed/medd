@@ -7,12 +7,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use crate::atomic::{self, target_of_temp, WhenAbsent};
 use crate::error::MeddError;
 use crate::workspace::is_markdown;
 
@@ -172,7 +172,16 @@ impl DocumentStore {
         let line_ending = detect_line_ending(&current_raw);
         let disk_content = restore_line_ending(content, line_ending);
 
-        atomic_write(&canonical, disk_content.as_bytes())?;
+        // `Fail`, not `Create`: reaching here means the compare-and-swap above just re-read this
+        // document, so an absent target means it was deleted in between — and creating it would
+        // silently recreate a file the user deleted, which D-11 forbids in as many words.
+        //
+        // **No test covers this line's choice, and one cannot.** The CAS makes the absent-target
+        // case a microsecond race rather than a reachable state, so a mutant changing this to
+        // `Create` survives the whole suite. It is correct by construction rather than by
+        // coverage, which is exactly why it is written down here: a surviving mutant invites
+        // someone to decide the distinction does not matter.
+        atomic::write(&canonical, disk_content.as_bytes(), WhenAbsent::Fail)?;
 
         let new_hash = ContentHash::of(disk_content.as_bytes());
         last_known.insert(canonical, new_hash.clone());
@@ -261,45 +270,6 @@ fn tracking_key(path: &Path) -> PathBuf {
 /// the symlink and its target live on different filesystems.
 fn canonicalize(path: &Path) -> Result<PathBuf, MeddError> {
     path.canonicalize().map_err(|e| MeddError::io(path, e))
-}
-
-/// The prefix and suffix medd's staging files are named with. Owned here, in one place, because
-/// two separate things have to agree about them: `atomic_write`, which creates them, and
-/// `sweep_abandoned_temps`, which recognises them. (The watcher will want the same recogniser when
-/// it stops folding medd's own writes into `tree:changed`.) A pattern held as a string literal in
-/// more than one place is a shape this project has already been bitten by repeatedly, so the
-/// round-trip between these two functions is pinned by a test rather than by care.
-const TEMP_PREFIX: &str = ".medd-";
-const TEMP_SUFFIX: &str = ".tmp";
-
-/// The staging file name used while writing the document called `target_file_name`.
-fn temp_file_name(target_file_name: &str) -> String {
-    format!("{TEMP_PREFIX}{target_file_name}{TEMP_SUFFIX}")
-}
-
-/// The inverse of `temp_file_name`: the document name a staging file belongs to, or `None` if
-/// `name` is not one of medd's staging files at all. An empty target (`.medd-.tmp`) is `None` —
-/// there is no document it could belong to.
-fn target_of_temp(name: &str) -> Option<&str> {
-    let target = name.strip_prefix(TEMP_PREFIX)?.strip_suffix(TEMP_SUFFIX)?;
-    (!target.is_empty()).then_some(target)
-}
-
-/// Whether `path` is one of medd's own staging files.
-///
-/// The watcher needs this: an atomic write is not a single-path event. FSEvents reports the
-/// staging file alongside the document, so without this a write of medd's own would surface as a
-/// change to something in the workspace — which is what own-write suppression exists to prevent,
-/// arriving by a path the content hash never sees, because the staging file is not a tracked
-/// document and has no hash to compare.
-///
-/// Expressed over `target_of_temp` rather than over the prefix and suffix directly, so the
-/// staging-file naming still has exactly one owner (see `TEMP_PREFIX`).
-pub fn is_staging_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .and_then(target_of_temp)
-        .is_some()
 }
 
 /// Removes abandoned staging files from `dir`, returning the paths it removed.
@@ -411,77 +381,10 @@ impl Default for TempSweeper {
     }
 }
 
-/// Writes `content` to a temp file beside `target`, fsyncs it, copies `target`'s permissions
-/// onto it, then `rename()`s it over `target`. `target` must already exist (compare-and-swap
-/// always re-reads it first) and must already be canonical — callers within this module only.
-fn atomic_write(target: &Path, content: &[u8]) -> Result<(), MeddError> {
-    let dir = target.parent().ok_or_else(|| MeddError::Io {
-        path: target.to_path_buf(),
-        message: "path has no parent directory".to_string(),
-    })?;
-    let file_name = target.file_name().ok_or_else(|| MeddError::Io {
-        path: target.to_path_buf(),
-        message: "path has no file name".to_string(),
-    })?;
-    let tmp_path = dir.join(temp_file_name(&file_name.to_string_lossy()));
-
-    // `staged` is held until after the rename below, deliberately: it carries the advisory lock
-    // `sweep_abandoned_temps` tests, so releasing it earlier would open a window in which a
-    // concurrent sweep could judge this very write abandoned and unlink the file out from under
-    // the rename. It stays locked briefly over the *target* inode after the rename, which nothing
-    // else locks, so that costs nothing.
-    let staged = stage_temp_file(&tmp_path, content).map_err(|e| MeddError::io(&tmp_path, e))?;
-
-    let outcome = (|| {
-        let perms = fs::metadata(target)
-            .map_err(|e| MeddError::io(target, e))?
-            .permissions();
-        fs::set_permissions(&tmp_path, perms).map_err(|e| MeddError::io(&tmp_path, e))?;
-        fs::rename(&tmp_path, target).map_err(|e| MeddError::io(target, e))?;
-        Ok(())
-    })();
-
-    if outcome.is_err() {
-        // Best-effort: don't leave litter in the workspace if a step after staging failed.
-        // The primary error is what the caller sees either way. Litter this *cannot* clean up —
-        // the process dying before reaching here — is what `sweep_abandoned_temps` exists for.
-        let _ = fs::remove_file(&tmp_path);
-    }
-    drop(staged);
-    outcome
-}
-
-/// The only step that touches disk before the rename. Isolated so a test can call it directly
-/// and prove the original is untouched at every point up to (but not including) the rename —
-/// which is the actual crash-safety property: `rename()` itself is atomic by the OS's own
-/// guarantee, so the only window worth testing is everything that happens before it.
-///
-/// Returns the open handle rather than dropping it, because it holds an exclusive advisory lock on
-/// the staging file that must outlive the rename — that lock is the whole mechanism
-/// `sweep_abandoned_temps` uses to tell "being written right now" from "abandoned by a process
-/// that died".
-///
-/// The open is deliberately not `File::create`: that truncates first, so a second instance racing
-/// for the same staging path would destroy the first's in-progress content *before* discovering it
-/// could not take the lock. Opening without truncating, locking, and only then truncating means a
-/// lost race fails having touched nothing.
-fn stage_temp_file(tmp_path: &Path, content: &[u8]) -> std::io::Result<fs::File> {
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(tmp_path)?;
-    file.try_lock().map_err(std::io::Error::from)?;
-    file.set_len(0)?;
-    file.write_all(content)?;
-    file.sync_all()?;
-    Ok(file)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atomic::{stage_temp_file, temp_file_name};
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
     use std::thread;
@@ -499,20 +402,6 @@ mod tests {
                     .unwrap_or(false)
             })
             .collect()
-    }
-
-    #[test]
-    fn temp_write_leaves_original_untouched_before_rename() {
-        let dir = tempdir().unwrap();
-        let target = dir.path().join("note.md");
-        fs::write(&target, "original content").unwrap();
-
-        let tmp_path = dir.path().join(".medd-note.md.tmp");
-        let staged = stage_temp_file(&tmp_path, b"new content").unwrap();
-
-        assert_eq!(fs::read_to_string(&target).unwrap(), "original content");
-        assert_eq!(fs::read_to_string(&tmp_path).unwrap(), "new content");
-        drop(staged);
     }
 
     #[test]
@@ -672,37 +561,6 @@ mod tests {
     // one of those conditions and asserts the file survives.
 
     #[test]
-    fn temp_name_round_trips_through_target_of_temp() {
-        // The two functions are inverses, and this is what keeps them that way: `atomic_write`
-        // creates names with one and the sweep recognises them with the other, so a change to
-        // either that isn't mirrored in the other is caught here rather than by the sweep quietly
-        // ceasing to recognise medd's own litter.
-        for target in [
-            "note.md",
-            "a.md",
-            "spaces in name.md",
-            ".hidden.md",
-            "no-extension",
-        ] {
-            let temp = temp_file_name(target);
-            assert_eq!(
-                target_of_temp(&temp),
-                Some(target),
-                "round trip failed for {target:?} via {temp:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn target_of_temp_rejects_names_that_are_not_ours() {
-        assert_eq!(target_of_temp("note.md"), None);
-        assert_eq!(target_of_temp("note.md.tmp"), None); // right suffix, no prefix
-        assert_eq!(target_of_temp(".medd-note.md"), None); // right prefix, no suffix
-        assert_eq!(target_of_temp(".medd-.tmp"), None); // no document it could belong to
-        assert_eq!(target_of_temp(""), None);
-    }
-
-    #[test]
     fn sweeps_an_abandoned_staging_file() {
         let dir = tempdir().unwrap();
         let target = dir.path().join("note.md");
@@ -858,29 +716,6 @@ mod tests {
             "sweeping must never touch the document itself"
         );
         assert!(leftover_temp_files(dir.path()).is_empty());
-    }
-
-    #[test]
-    fn a_second_staging_attempt_fails_without_destroying_the_first() {
-        // Two instances racing for the same staging path (ADR-003's two-window race). The loser
-        // must fail having touched nothing — `File::create` would have truncated the winner's
-        // in-progress content before discovering it could not take the lock.
-        let dir = tempdir().unwrap();
-        let tmp_path = dir.path().join(temp_file_name("note.md"));
-
-        let first = stage_temp_file(&tmp_path, b"the winner's content").unwrap();
-        let second = stage_temp_file(&tmp_path, b"the loser's content");
-
-        assert!(
-            second.is_err(),
-            "the second staging attempt must not succeed"
-        );
-        assert_eq!(
-            fs::read_to_string(&tmp_path).unwrap(),
-            "the winner's content",
-            "the loser truncated the winner's staged content"
-        );
-        drop(first);
     }
 
     #[test]

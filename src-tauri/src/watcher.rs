@@ -17,7 +17,8 @@ use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, Recom
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::document::{is_staging_file, ContentHash, DocumentStore, ExternalChange};
+use crate::atomic::is_staging_file;
+use crate::document::{ContentHash, DocumentStore, ExternalChange};
 use crate::quickopen::FileIndex;
 use crate::workspace::{is_within_ignored, Workspace};
 
