@@ -494,7 +494,17 @@ forward**, and nothing may assume the window is frontmost after a routed open.
 
 ---
 
-## Carried fixes — from the increment 7 design review
+## Carried fixes
+
+**Status is marked in the rows themselves, and that is the one thing in this document that restates
+rather than references** — deliberately, because a checklist whose items point elsewhere for their
+own state is unusable. The cost is that it must be struck through as things land; if a row below is
+unmarked and you believe it is done, check before trusting it.
+
+Still open at the time of writing: architect findings 4, 5 and 6, `document_close`, and QA's 4, 6,
+7 and 8. Everything else here is struck through.
+
+### From the increment 7 design review
 
 Found by the principal architect reviewing increment 7 against the design
 ([review-increment-7.md](review-increment-7.md)), verified by running code. Two blockers were
@@ -503,7 +513,7 @@ safe, and are therefore queued rather than blocking — but none of them ship br
 
 | # | Finding | Why it matters |
 |---|---|---|
-| 3 | A write settling after a conflict resolution clobbers the resolved state | Produces a conflict banner that no user edit caused — D-11's own named fatal failure. Needs a per-tab generation counter captured before the await. |
+| ~~3~~ | **Done** (promoted to blocker, fixed in the increment-7 batch). A write settling after a conflict resolution clobbers the resolved state | Produces a conflict banner that no user edit caused — D-11's own named fatal failure. Needs a per-tab generation counter captured before the await. |
 | 4 | `detached` is a terminal, invisible state | A deleted file silently stops autosaving forever, with nothing on screen and no recovery — a recreated file comes back untracked. `git checkout` across branches does exactly this. |
 | 5 | Any read failure is reported as deletion | `EACCES`/`EIO`/`EMFILE` — the last most likely during the filesystem storms that generate watcher traffic — all latch a tab into finding 4's state. Only `NotFound` should mean removed. |
 | 6 | A non-UTF-8 external change is lossily converted, and the CAS lets medd write it back | `read()` refuses non-UTF-8 but `check_external_change` uses `from_utf8_lossy`, and the hash is of the raw bytes — so a later autosave passes CAS and writes replacement characters over the file's real content. **The line-ending fix now inherits this exposure:** detection in `read()` only ever sees valid UTF-8, but in `check_external_change` it runs on lossy output. A UTF-16LE document — an ordinary way for a `.md` to arrive from Windows — decodes to `\r\0\n\0` per break, so no `\r\n` is found, the lone-`\r` and lone-`\n` counts tie, a CRLF file is detected as LF, and the next write rewrites every line ending. 6's ruled fix closes this completely, since the content never reaches detection. |
@@ -615,8 +625,8 @@ not defects; the code is correct in each case:
 
 | # | Finding | Why it matters |
 |---|---|---|
-| 9 | `does not fire when the buffer is not dirty` is vacuous | `scheduleAutosave` is reachable only through `onDocChanged`, which fires only on an edit — so the test opens a tab, edits nothing, and no autosave is ever scheduled, meaning the dirty guard never runs. Mutation-proven: deleting the guard does not kill it. The test that would exercise it is a real scenario rather than a contrivance — edit, then let a clean external reload land *before* the timer fires, so the tab is clean when `requestWrite` runs. Someone types, a `git checkout` reverts the file to match, and the pending timer must not write. |
-| 10 | The `markSynced` invariant is protected only by accident | Mutating `markSynced` to record `tab.currentText` instead of `syncedText` — exactly the bug its own comment warns about — is killed by a *single* test about `waitForQuiescence` chaining, which is about something else entirely. The bug it silently guards: type `A`, the write starts carrying `A`, type `B`, the write settles, `markSynced` records `AB` as what is on disk. `dirty` becomes false, so **`B` is never written and never will be** — a lost keystroke, no banner, no error, in the increment built to prevent exactly that. The invariant survives only as a side effect of a test that could be restructured for unrelated reasons by someone with no idea what went with it. One explicit test, named for the invariant: *a write's outcome records what was written, not what the buffer holds when it settles.* |
+| ~~9~~ | **Done** (`dcf2c52`). `does not fire when the buffer is not dirty` is vacuous | `scheduleAutosave` is reachable only through `onDocChanged`, which fires only on an edit — so the test opens a tab, edits nothing, and no autosave is ever scheduled, meaning the dirty guard never runs. Mutation-proven: deleting the guard does not kill it. The test that would exercise it is a real scenario rather than a contrivance — edit, then let a clean external reload land *before* the timer fires, so the tab is clean when `requestWrite` runs. Someone types, a `git checkout` reverts the file to match, and the pending timer must not write. |
+| ~~10~~ | **Done** (`dcf2c52`). The `markSynced` invariant is protected only by accident | Mutating `markSynced` to record `tab.currentText` instead of `syncedText` — exactly the bug its own comment warns about — is killed by a *single* test about `waitForQuiescence` chaining, which is about something else entirely. The bug it silently guards: type `A`, the write starts carrying `A`, type `B`, the write settles, `markSynced` records `AB` as what is on disk. `dirty` becomes false, so **`B` is never written and never will be** — a lost keystroke, no banner, no error, in the increment built to prevent exactly that. The invariant survives only as a side effect of a test that could be restructured for unrelated reasons by someone with no idea what went with it. One explicit test, named for the invariant: *a write's outcome records what was written, not what the buffer holds when it settles.* |
 
 From QA's retroactive pass over increments 1-6 and 8:
 
