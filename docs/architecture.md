@@ -179,11 +179,22 @@ found this corrupts CRLF documents on exactly the path §3 calls the safe, silen
 corruption then autosaves.
 
 The fix, and the invariant it establishes: **the frontend never sees anything but LF, and never
-learns line endings exist.** `document_read` detects the document's dominant convention from the
-raw bytes and hands back LF-only content; `document_write` restores that convention immediately
-before the bytes touch disk, and hashes what was actually written, not what the frontend sent. The
-convention is re-detected on every read, so a file whose ending changes externally (a `git
-checkout` flipping `text=auto`) is picked up rather than remembered stale.
+learns line endings exist.** `document_read` normalises to LF-only content before handing it over;
+`document_write` restores the file's own convention immediately before the bytes touch disk, and
+hashes what was actually written, not what the frontend sent.
+
+**The convention is never stored — it is derived, at each end, from the bytes in hand.** An earlier
+version of this section described it as detected on read, kept, and restored on write. The
+implementation does something strictly better and the specification is corrected toward the code
+rather than the other way round: by the time `document_write` converts, it has already read the
+current bytes *and* proved their hash matches what the caller expected, so disk is provably exactly
+what medd believes it is — which makes those bytes the authoritative source for the file's
+convention at that instant. A derived value cannot go stale; a stored one can, and would have, the
+moment `document_close` evicted its entry while a close-flush was still in flight.
+
+This is the same rule as the one governing dirty state, one layer down: **derive, don't store.** It
+also means a file whose convention changes externally is simply picked up — `dos2unix` run on a
+document medd has open is not silently reverted by medd's next write, and `unix2dos` is adopted.
 
 **`check_external_change` normalises too, and naming it is not redundant.** It is the path the
 corruption was actually found through: `document:changed-on-disk` delivered raw CRLF into a diff
@@ -195,6 +206,9 @@ exist — LF and CRLF — and a lone `\r` (classic Mac-era files) folds into LF 
 rather than being given a third representation. A file with mixed endings is, as a documented
 consequence rather than a bug, fully normalised to its dominant convention by its *first* write
 through medd — collapsing to one in-memory representation only has one convention left to restore.
+That means a byte change to lines the user did not edit, which is a real cost and an inherent one:
+it falls directly out of "the frontend never learns line endings exist", and there is no better
+answer available at this layer.
 
 The invariant this buys: **`lastSyncedText` and the retained `EditorState` are always in the same
 line-ending convention (LF), so a diff between them is always comparing like with like.**
