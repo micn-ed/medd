@@ -105,8 +105,14 @@ contains no decisions; if a framework-aware function has a branch in it, it is i
 Untestability was the symptom, not the problem.
 
 So the reportable statement is rarely "I can't reach this". It is "there is a decision in a place
-that cannot be reached, and here is why that placement is wrong" — which is actionable, where a
-coverage gap invites someone to go looking for a cleverer test harness.
+that cannot be reached, and here is why that placement is wrong."
+
+These are not the same observation phrased two ways — **they are different instructions to whoever
+reads them next.** The first sends someone to build a cleverer harness: an afternoon spent
+constructing the scaffolding that exists only because the code is shaped wrong, after which the
+defect is still there and now has a test propping it up. The second gets the code fixed and the
+harness never needs to exist. The weaker phrasing isn't merely less useful; it is actively
+expensive.
 
 ---
 
