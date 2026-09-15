@@ -304,13 +304,41 @@ Deliberately late: the fiddliest platform work, and nothing above depends on it.
   ```
   medd fixture.md          # cold launch -> pending-open buffer -> openTab -> focus
   keystroke "x"            # proven
-  keystroke cmd+q          # the real gesture
-  read fixture.md          # the assertion
+  keystroke cmd+q          # WITHIN the debounce window — see below
+  read fixture.md          # assert exact bytes
   ```
+
+  **The timing is the whole test, and stating it is not optional.** `AUTOSAVE_DEBOUNCE_MS` is
+  1000, so an ordinary autosave writes `x` to disk one second after the keystroke with no quit
+  involved. Without a timing constraint this script **passes against a quit flush that is broken,
+  silently does nothing, or has been deleted outright** — at any human pace, any `osascript` round
+  trip, or any `sleep 1` someone adds to "let it settle". The named deliverable for the one path
+  that is otherwise inference would be vacuous by default, and vacuous in the direction that reads
+  as success.
+
+  Four requirements, all load-bearing:
+
+  - **The gesture lands inside the debounce window** — under ~1s from the last keystroke. Only then
+    is the flush under test rather than the ordinary autosave.
+  - **Assert the timing rather than assuming it.** Measure keystroke→gesture elapsed and fail the
+    run if it exceeds the window. A slow machine or a cold `osascript` otherwise converts this
+    silently into the vacuous version, which stays green, so nobody looks. **The test must be able
+    to detect that it has stopped testing anything.**
+  - **Run the negative control**: the same script, same timing, against a build with
+    `app:before-quit` disabled. It must fail. A script never observed failing has an unknown
+    failure mode.
+  - **Assert exact bytes, not a substring.** `contains "x"` also passes on a truncated or
+    duplicated document.
 
   **Run it from a cold launch**, not against a warm instance: keystrokes need the window frontmost,
   activation is best-effort, and a cold launch *is* frontmost. Note `openFile` is latched during
   shutdown, so the open must complete before the quit gesture — which it naturally does.
+
+  **Two more scenarios become keyboard-reachable for the first time here**, and are cheap to take
+  while the harness exists: **quit with several dirty tabs** — unit-verified but never exercised
+  against real files, and multi-tab scale is what made this a blocker rather than a repeat of the
+  single-tab case — and **quit with a conflicted tab**, where the file must still hold the external
+  change afterwards.
 - `medd <nonexistent-file>` **errors**; it does not create. See architecture.md §9 for why, and
   note the error must not use a surface that replaces the tab UI.
 - `make install-cli` symlinks the shim. Homebrew is deferred.

@@ -86,6 +86,19 @@ Two corollaries worth keeping:
 When fixing a vacuous test, leave a comment naming the mutant its new assertion kills. Otherwise it
 reads as redundant and gets optimised away by the next person.
 
+**Ask it of specifications too, not only of code.** A test described in a plan can be vacuous
+before anyone writes it. This project's named deliverable for its one unverified path — launch,
+type a character, quit, check the file — passed against a quit flush that did nothing at all,
+because the ordinary autosave writes the same character a second later and the spec never said the
+quit had to happen first. The spec was reviewed by three people and the omission was a *timing
+constraint*, which is the kind of detail that reads as implementation noise right up until it is
+the entire test.
+
+**And a test must be able to detect that it has stopped testing anything.** Where a test depends on
+a timing window, a race, or an environment property, assert that property rather than assuming it —
+otherwise a slow machine or a cold start quietly converts a real test into a vacuous one that stays
+green, which is worse than a failure because nobody investigates a pass.
+
 ---
 
 ## "I couldn't test this" is usually a finding about the code, not a limitation of the tester
