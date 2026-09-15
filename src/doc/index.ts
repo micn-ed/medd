@@ -7,4 +7,5 @@ export {
   flushAll,
   waitForQuiescence,
   waitForAllQuiescent,
+  isQuitInProgress,
 } from './doc'

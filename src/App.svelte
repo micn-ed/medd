@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
+  import { listen } from '@tauri-apps/api/event'
   import type { EditorView } from '@codemirror/view'
   import { Tree } from './tree'
   import { Editor } from './editor'
@@ -18,9 +19,25 @@
     registerMountedView,
     unregisterMountedView,
   } from './tabs'
-  import { ConflictBanner, initDocSync, reload, keepMine, waitForQuiescence } from './doc'
+  import {
+    ConflictBanner,
+    initDocSync,
+    reload,
+    keepMine,
+    waitForQuiescence,
+    isQuitInProgress,
+  } from './doc'
 
   initDocSync()
+
+  // Cmd+W (medd's own menu, main.rs's `build_menu` — Menu::default's binding quits the app under
+  // I-2, which every other tabbed editor on the platform reserves for close-tab). `closeTab`
+  // already flushes any pending autosave for the tab it removes, and does nothing if no tab is
+  // active, so there's nothing else this needs to do.
+  void listen('menu:close-tab', () => {
+    const path = activeTabPath()
+    if (path) closeTab(path)
+  })
 
   interface WorkspaceInfo {
     root: string
@@ -67,6 +84,12 @@
   }
 
   async function openFile(path: string) {
+    // Shutdown latch (plan-v0.1.md's fifth blocker): opening a tab is new work, and once quit's
+    // flush has begun medd accepts none, not just new writes. Harmless today by coincidence — a
+    // freshly read tab starts clean, so nothing would schedule a write regardless, and
+    // `scheduleAutosave` is separately latched — but relying on that coincidence is exactly the
+    // shape that stops being true the next time either of those changes for an unrelated reason.
+    if (isQuitInProgress()) return
     error = ''
     try {
       // If this path was just closed with a write still airborne (autosave issues a write

@@ -20,6 +20,21 @@ import {
 
 const AUTOSAVE_DEBOUNCE_MS = 1000
 
+// Set once, on `app:before-quit`, and never cleared (the process is exiting; there's no "after").
+// The invariant it exists to hold: once shutdown begins, medd accepts no new work of any kind —
+// not just no new writes, which is a narrower promise someone could widen by accident later while
+// believing they were preserving it. `scheduleAutosave` and the `document:changed-on-disk`
+// listener (which would otherwise call `applyExternalContent`, rewriting a buffer that's about to
+// be flushed) both check it; so does App.svelte's `openFile` before its pre-read quiescence wait,
+// since that wait — and the read behind it — is exactly the kind of new work the latch is for, not
+// merely "no new writes" narrowly read. `flushAll`/`flushAutosave` are deliberately exempt: their
+// whole job is draining what was already owed before the latch closed.
+let isShuttingDown = false
+
+export function isQuitInProgress(): boolean {
+  return isShuttingDown
+}
+
 interface ConflictErrorPayload {
   kind: 'Conflict'
   currentContent: string
@@ -117,6 +132,7 @@ export function flushAll(): void {
 }
 
 function scheduleAutosave(path: string): void {
+  if (isShuttingDown) return // shutdown latch: drain what's owed, accept no new work
   const state = stateFor(path)
   if (state.timer) clearTimeout(state.timer)
   state.timer = setTimeout(() => {
@@ -248,12 +264,20 @@ interface DocumentRemovedPayload {
 }
 
 /** Wires tabs.svelte.ts's per-keystroke hook to the autosave debounce, and starts listening for
- * the watcher's events (architecture.md §4). Call once, at app start-up. */
+ * the watcher's events (architecture.md §4) and the quit flush (plan-v0.1.md's fifth blocker).
+ * Call once, at app start-up. */
 export function initDocSync(): void {
   setOnDocChanged(scheduleAutosave)
   setOnTabClosing(flushAutosave)
 
   void listen<DocumentChangedPayload>('document:changed-on-disk', (event) => {
+    // Shutdown latch: a `git checkout` or similar landing during the quit flush would otherwise
+    // call `applyExternalContent`, rewriting the buffer of a tab whose write is about to be
+    // flushed — and every write it kept generating would push `waitForAllQuiescent` further away,
+    // since a clean tab's reload runs straight back through `onDocChanged` -> `scheduleAutosave`
+    // (itself latched, but only after this listener would have already done the work of
+    // reloading and re-dirtying the buffer for nothing).
+    if (isShuttingDown) return
     const { path, content, hash } = event.payload
     const tab = getTab(path)
     if (!tab) return // no longer open — nothing to reconcile
@@ -268,6 +292,21 @@ export function initDocSync(): void {
 
   void listen<DocumentRemovedPayload>('document:removed-on-disk', (event) => {
     markDetached(event.payload.path)
+  })
+
+  // The fifth blocker's flush: Rust asks (`app:before-quit`) once `RunEvent::ExitRequested` has
+  // been prevented, and this is the frontend's entire response to it. The latch closes first, so
+  // nothing scheduled *during* the drain below can ever be mistaken for something the drain still
+  // owes. The Rust side's own timer is what actually bounds how long medd waits — this can only
+  // make that happen sooner (`quit_ready`), never later; if the call never resolves (a crashed
+  // frontend, a thrown exception before it), the app still exits on schedule.
+  void listen('app:before-quit', () => {
+    isShuttingDown = true
+    flushAll()
+    void waitForAllQuiescent()
+      .catch(() => {})
+      .then(() => invoke('quit_ready'))
+      .catch(() => {})
   })
 }
 

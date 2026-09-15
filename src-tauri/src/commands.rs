@@ -12,6 +12,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::document::{ContentHash, DocumentStore};
 use crate::error::MeddError;
+use crate::quit::QuitCoordinator;
 use crate::watcher::FsWatcher;
 use crate::workspace::{PathClass, TreeEntry, Workspace};
 
@@ -156,4 +157,15 @@ pub fn open_external(app: AppHandle, url: String) -> Result<(), MeddError> {
             path: PathBuf::new(),
             message: e.to_string(),
         })
+}
+
+/// The frontend's signal that it has flushed every pending autosave and awaited quiescence
+/// (`doc/doc.ts`'s `flushAll` + `waitForAllQuiescent`), in response to `app:before-quit`
+/// (plan-v0.1.md's fifth blocker). Only ever *shortens* the wait a `RunEvent::ExitRequested`
+/// handler in `main.rs` is already bounding on its own timer — this command has no power to make
+/// medd wait any longer than that bound allows, only to end the wait early once there is nothing
+/// left to lose by exiting now.
+#[tauri::command]
+pub fn quit_ready(coordinator: State<'_, QuitCoordinator>) {
+    coordinator.signal_ready();
 }
