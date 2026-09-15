@@ -56,6 +56,36 @@ Three instances on this project:
 claim. Then break the code deliberately and confirm the test fails **for the right reason** — not
 merely that it fails. Nearly every real defect found here was caught that way.
 
+**The question that finds the rest: would this test still pass if the mechanism simply didn't run?**
+It has one tell in common across every instance found here — the test passes in a world where the
+thing under test never happens. And it is answerable by *mutation* rather than opinion: disable the
+mechanism a suite is named for, and every test that stays green was never testing it.
+
+Run against this project's own verification suites, that found four vacuous assertions in one pass:
+a pair named for cursor preservation across an external reload, which passed with the reload
+disabled because a document nothing changed keeps its cursor; one asserting no carriage return
+reaches the buffer, equally true of a buffer nothing touched; and one comparing the tab state
+produced by the two routes into a conflict, which with conflict-raising disabled compared two
+identical *absences* and found them equal.
+
+That last one carries the sharpest lesson, because **the thing that made it feel rigorous is what
+made it vacuous**: it compared whole state snapshots rather than spot-checking fields. Comparing
+everything sounds stronger than comparing something, and here it meant comparing two empty things
+and finding them equal.
+
+Two corollaries worth keeping:
+
+- **Precision about method is not the same as the method being sound**, and the difference is not
+  visible by introspection. The tests most likely to be vacuous are the ones their author would
+  defend hardest, because confidence and thoroughness feel alike from the inside.
+- **Distinguish a wrong claim from weak evidence.** When these four were fixed, every conclusion
+  they had been cited for still held. What was wrong was the strength of the evidence, not the
+  findings — and saying so precisely is what stops "four of my tests were vacuous" from implying
+  something false in the other direction.
+
+When fixing a vacuous test, leave a comment naming the mutant its new assertion kills. Otherwise it
+reads as redundant and gets optimised away by the next person.
+
 ---
 
 ## Measured, not estimated — and validate the instrument
