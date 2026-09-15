@@ -279,7 +279,27 @@ exactly the moment it is easiest to spend on the transmission and forget the fil
 
 ---
 
-## "We have a real end-to-end test for it" reads as stronger coverage than it is
+## A verification criterion that seems to guard the failure retires the question
+
+The vacuity rules above are about individual tests. The same failure happens one level up, to a
+*strategy* — and there it is worse, because a strategy is written precisely to close a question and
+nobody re-opens a closed one.
+
+It happened here. After two bugs in one subsystem, a per-listener criterion was written to catch
+the next. Checking whether it was achievable found that **it could not catch either bug it was
+written for**: both were about *which platform hook was chosen*, which lives in registration code no
+test can reach, while the criterion covers route *shaping*. And for two of three listeners it could
+only ever report "untested", because the mock runtime cannot emit their events at all. **A
+criterion whose only possible answer is "untested" is not a criterion.**
+
+Two things to do with it:
+
+- **Ask what a criterion would have caught, against the specific failures that prompted it.** Not
+  "is this a good check" but "would this have gone red on the bug I am writing it because of." The
+  answer is often no, and it is much easier to see before the criterion has been satisfied once.
+- **When a criterion covers only part of the question, split it and name the uncovered part.**
+  *Shaping is unit-verified; hook choice is gesture-verified, and one gesture is deferred* is
+  honest. A single claim covering both retires the half nobody can check.
 
 An end-to-end test exercises the real thing, which makes it feel like the strongest evidence
 available. Often it is the *weakest*, because the real thing is nondeterministic and the test can
