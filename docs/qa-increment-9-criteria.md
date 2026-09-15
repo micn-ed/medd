@@ -140,6 +140,13 @@ the invariant exactly as violated as before — with the added cost that it now 
 `fn scope_and_watch(root: PathBuf, ...)` — or taking `&Path` from a root the caller has already
 copied out — is the one that holds.
 
+**And check it first.** The availability test is only meaningful once the signature is right: a
+test that takes the lock on another thread and finds it *available* while running against a
+`&Path` signature has proved the test wrong, not the code right — it means the test never actually
+overlapped the call. Ordering the checks signature-then-availability is not tidiness; the wrong
+order spends the investigation on the test instead of the code, which is the same trap one level
+out.
+
 **Criterion: check the signature, not the call site.** A call site that currently copies first can
 be edited back; a signature that only accepts owned data cannot be, without the change being
 visible in the diff as a type change.
