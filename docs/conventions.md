@@ -86,6 +86,14 @@ Two corollaries worth keeping:
 When fixing a vacuous test, leave a comment naming the mutant its new assertion kills. Otherwise it
 reads as redundant and gets optimised away by the next person.
 
+**Run a mutant against the whole suite, not against the test you expect to fail.** Running it
+against that one test tells you *that test passes*. Running it against everything tells you **which
+test is carrying the property** — and those differ more often than is comfortable. On this project
+a symlink-following mutant survived the test written for it (the document was still reachable by
+its real path, so the assertion held) and was killed by a test on the other side of the system
+entirely. The property was covered; the map of what covered it was wrong. A mutant run narrowly
+would have reported a survivor and sent someone to write a test that already existed.
+
 **Ask it of specifications too, not only of code.** A test described in a plan can be vacuous
 before anyone writes it. This project's named deliverable for its one unverified path — launch,
 type a character, quit, check the file — passed against a quit flush that did nothing at all,
@@ -293,6 +301,13 @@ Concretely here: the file tree follows directory symlinks and the quick-open wal
 symlinked directory of notes is visible in the sidebar and absent from search. The test asserts the
 two enumerations agree; it deliberately does not encode whether a symlinked directory belongs to
 the workspace.
+
+**Not everything that looks shared should be shared.** A question two callers both *could* ask is
+only a shared predicate if they are asking the same question for the same reason. `dir_list` needs
+to know whether an entry resolves to anything at all, because it has a category for the answer
+(W-8's visible-but-inert); no other consumer has that category, so that check stays local and is
+deliberately not one of the workspace predicates. Sharing it would hand every other caller a
+distinction it must then ignore, which is coupling wearing the costume of reuse.
 
 **Where it lives:** with the consumer that was added *later* — that's the side that can drift from
 an already-established answer.
