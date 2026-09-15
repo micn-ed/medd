@@ -93,6 +93,12 @@ more than the finding was.
 
 - **The working tree belongs to whoever is mid-increment.** Reviews, documentation edits and
   exploratory work wait for the gap between increments, or happen in a copy outside the repo.
+- **Test commits, not working trees, and say which revision a result refers to.** The rule above
+  protects *writes*; this is its read-side counterpart, and it was learned the expensive way. A
+  verification run against a tree someone is actively editing is a snapshot of a revision that may
+  never have been committed — two runs can disagree and both be correct against superseded states.
+  It very nearly produced a confident report of a defect that had already been removed while the
+  test was running.
 - **Commit explicit paths, never `git add -A`.** A blanket add sweeps up someone else's
   uncommitted work in progress — which at best produces a commit whose message does not describe
   its contents, and at worst loses that work to a later reset. Check `git status` before
