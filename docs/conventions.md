@@ -86,6 +86,18 @@ Two corollaries worth keeping:
 When fixing a vacuous test, leave a comment naming the mutant its new assertion kills. Otherwise it
 reads as redundant and gets optimised away by the next person.
 
+**A mutation harness must fail loudly when a mutation does not apply.** A mutant that failed to
+apply is **indistinguishable from one that survived** — and it fails in the more alarming
+direction, sending someone to write a test for a property that is already covered. It happened
+here: a script asserted the pattern it was replacing existed, then reported its result anyway, so
+when `cargo fmt` reflowed the target across five lines the substitution silently did nothing and
+the table printed `*** SURVIVED ***`.
+
+Same shape as *announce the act, not the outcome*: the script **had** the information and the
+report discarded it. Non-application is a hard stop, never a row in the results. And note how it
+was caught — the survivor was surprising enough to re-check, which is exactly the wrong reason to
+catch something.
+
 **Run a mutant against the whole suite, not against the test you expect to fail.** Running it
 against that one test tells you *that test passes*. Running it against everything tells you **which
 test is carrying the property** — and those differ more often than is comfortable. On this project
@@ -264,6 +276,26 @@ against the reporter's intent catches dishonesty; only reading the code catches 
 **When you write an honest caveat in a message, check it also exists where the work lives.** The
 caveat is usually written at the moment of greatest clarity about the work's limits, and that is
 exactly the moment it is easiest to spend on the transmission and forget the file.
+
+---
+
+## "We have a real end-to-end test for it" reads as stronger coverage than it is
+
+An end-to-end test exercises the real thing, which makes it feel like the strongest evidence
+available. Often it is the *weakest*, because the real thing is nondeterministic and the test can
+only fail when the environment happens to cooperate.
+
+Two instances here, arriving from opposite directions:
+
+- A **cycle** test can only fail by *hanging* — the worst failure mode a suite has. The diamond
+  test fails as a deterministic count instead.
+- A **real-watcher** test could not kill the redundant-ancestor mutant, because whether the OS
+  reports a containing directory varies between runs. The pure unit tests on the comparison killed
+  it every time.
+
+In both cases the property is real and **the reliable guard is the pure one**. Keep the end-to-end
+test — it confirms the pieces are wired together, which nothing else does — but do not count it as
+the guard for a property a deterministic test can hold.
 
 ---
 
