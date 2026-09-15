@@ -14,6 +14,7 @@ use crate::document::{ContentHash, DocumentStore, TempSweeper};
 use crate::error::MeddError;
 use crate::quickopen::{FileIndex, QuickOpenEntry};
 use crate::quit::QuitCoordinator;
+use crate::routing::{PendingOpens, RouteTarget};
 use crate::watcher::FsWatcher;
 use crate::workspace::{PathClass, TreeEntry, Workspace};
 
@@ -274,4 +275,15 @@ pub fn open_external(app: AppHandle, url: String) -> Result<(), MeddError> {
 #[tauri::command]
 pub fn quit_ready(coordinator: State<'_, QuitCoordinator>) {
     coordinator.signal_ready();
+}
+
+/// The frontend's signal that it has attached its `open:request` listener and is ready to
+/// receive launches (plan-v0.1.md increment 10, ADR-003). Drains whatever `main.rs`'s listeners
+/// routed before this call — a cold launch from Finder or the CLI goes through this every time;
+/// it is the normal path, not the exception. Safe to call more than once (a WebView reload, dev
+/// HMR, or a crash-reload all call this again): see `PendingOpens::mark_ready_and_drain`'s own
+/// doc comment for why a second call correctly returns nothing rather than re-opening everything.
+#[tauri::command]
+pub fn frontend_ready(pending: State<'_, PendingOpens>) -> Vec<RouteTarget> {
+    pending.mark_ready_and_drain()
 }

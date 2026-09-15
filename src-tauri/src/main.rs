@@ -2,11 +2,14 @@
 // (see README), but this is harmless to leave in place.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Mutex;
 
 use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
+
+use routing::{paths_from_argv, paths_from_urls, route_open, Delivery, PendingOpens};
 
 mod commands;
 mod document;
@@ -108,6 +111,23 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
 fn main() {
     let app = tauri::Builder::default()
+        // Registered first, per upstream's own recommendation: this plugin's `.setup()` is the
+        // thing that decides, atomically and exactly once, whether this process becomes the
+        // primary or forwards to one and exits — everything else should happen after that
+        // question is settled. The callback here only ever fires for a *secondary* launch that
+        // this process's own bind refused (architecture.md §9); the primary's own cold-launch
+        // argv never reaches it; see the `.setup()` block below for that half.
+        .plugin(tauri_plugin_single_instance::init(
+            |app_handle, argv, _cwd| {
+                // The shim resolves relative paths to absolute before handing them on
+                // (architecture.md §9), so `_cwd` is deliberately unused here — the running
+                // instance's own working directory is not the launching one's, and the plugin
+                // forwards `_cwd` only because the wire format always carries it, not because medd
+                // needs it. QA's criterion for this exact claim ("the shim is authoritative for
+                // resolution") is tested through `scripts/medd` itself, not here.
+                handle_launch(app_handle, paths_from_argv(&argv));
+            },
+        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(document::DocumentStore::new())
@@ -115,6 +135,7 @@ fn main() {
         .manage(quit::QuitCoordinator::new())
         .manage(quickopen::FileIndex::new())
         .manage(document::TempSweeper::new())
+        .manage(PendingOpens::new())
         .setup(|app| {
             let (fs_watcher, rx) =
                 watcher::FsWatcher::new().expect("failed to start filesystem watcher");
@@ -127,6 +148,14 @@ fn main() {
 
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
+
+            // The primary's OWN cold-launch arguments — `medd fixture.md` when nothing was
+            // running yet. The single-instance plugin's callback above never sees these: it only
+            // fires when a *later* launch finds this process already bound. Routed through the
+            // exact same `handle_launch` as every other entry point, so this is one more caller
+            // rather than a fourth thing to keep in sync with the other three.
+            let argv: Vec<String> = std::env::args().collect();
+            handle_launch(app.handle(), paths_from_argv(&argv));
 
             app.on_menu_event(|app_handle, event| match event.id().as_ref() {
                 "quit" => app_handle.exit(0),
@@ -163,6 +192,7 @@ fn main() {
             commands::quit_ready,
             commands::quick_open_files,
             commands::open_external,
+            commands::frontend_ready,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -207,9 +237,57 @@ fn main() {
                     start_flush_thread(app_handle.clone(), rx);
                 }
             }
+            // Finder double-click / "Open With" (ADR-003): the other listener that carries
+            // paths, routed through the exact same `handle_launch` as the CLI's two call sites.
+            RunEvent::Opened { urls } => {
+                handle_launch(app_handle, paths_from_urls(&urls));
+            }
+            // Dock click, or `open -a` on an already-running instance — carries no paths at all
+            // (ADR-003: "routing and activation are separate", and this listener is the reason
+            // that became visible), so it calls `activate` alone rather than `handle_launch`,
+            // which would have nothing to route and nowhere to send an empty batch.
+            RunEvent::Reopen { .. } => {
+                activate_main_window(app_handle);
+            }
             _ => {}
         }
     });
+}
+
+/// Routes `paths` (already argv[0]-stripped or URL-filtered by the caller) and activates the
+/// main window — the two actions ADR-003 says every path-carrying listener performs, in that
+/// order. Contains no decision of its own: `route_open` has already decided what each path is,
+/// and `PendingOpens::offer` has already decided whether to deliver live or hold, so this only
+/// ever matches on their answers and performs the mechanical action each one names.
+fn handle_launch(app_handle: &AppHandle, paths: Vec<PathBuf>) {
+    let mut targets = Vec::new();
+    let mut errors = Vec::new();
+    for result in route_open(paths) {
+        match result {
+            Ok(target) => targets.push(target),
+            Err(e) => errors.push(e),
+        }
+    }
+
+    if !errors.is_empty() {
+        // Not a surface that replaces the tab UI (architecture.md §9) — the frontend's own
+        // `open:error` handler is responsible for that, same posture as `document_read`'s errors.
+        let _ = app_handle.emit("open:error", errors);
+    }
+
+    if !targets.is_empty() {
+        if let Delivery::Live(targets) = app_handle.state::<PendingOpens>().offer(targets) {
+            let _ = app_handle.emit("open:request", targets);
+        }
+    }
+
+    activate_main_window(app_handle);
+}
+
+fn activate_main_window(app_handle: &AppHandle) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        routing::activate(&window);
+    }
 }
 
 /// Asks the frontend to flush (doc/doc.ts's `flushAll`) and waits, bounded, for it to reach
