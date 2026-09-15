@@ -388,7 +388,21 @@ flush is an optimisation on top of it** — the flush must never be treated as t
 file safe.
 
 Both halves ship together: fixing the keystroke alone hides the data loss behind a rarer gesture,
-and fixing the flush alone leaves an editor that quits on Cmd+W. The keystroke needs a custom menu
+and fixing the flush alone leaves an editor that quits on Cmd+W.
+
+**Verified before building behind it:** a custom menu item bound to `CmdOrCtrl+Q`, with a handler
+calling `app.exit(0)`, does receive its `MenuEvent` normally on this stack (tauri 2.11.5 /
+tauri-runtime-wry 2.11.4 / tao 0.35.3) — tested end to end with a synthetic Cmd+Q. The whole design
+rests on that one assumption, so it was measured rather than assumed.
+
+Two macOS menu behaviours found while testing it, both of the silently-accepted kind:
+
+- **A top-level `Menu`'s children must be `Submenu`s.** A bare `MenuItem` appended directly to the
+  top-level menu is accepted by the API without error and simply never appears in the menu bar.
+- **macOS forces the *first* top-level submenu's displayed title to the application's name**,
+  whatever string was passed. Not a problem in the real build, where the app-identity submenu is
+  first exactly as in `Menu::default` — recorded so it isn't mistaken for a bug the next time
+  someone notices it. The keystroke needs a custom menu
 replacing `Menu::default` (Quit stays Cmd+Q); the flush needs `ExitRequested` + `prevent_exit()`,
 asking the frontend to flush and exiting when it reports done. Its invariant is the close-flush's
 with clause 2 vacuous: **the exit must issue everything the debounce still owes, and the outcome of
