@@ -154,6 +154,46 @@ the change that makes a detector blind is the same change that has everyone's at
 
 ---
 
+## A tool whose failure mode is silence must fail loudly when it does nothing
+
+The mutation harness in `scripts/mutants.sh` took five bug fixes to work, and **four of them failed
+toward a clean pass.** Under `set -euo pipefail`, a green baseline makes `grep` exit 1; a working
+mutant makes the test runner exit 1; `[ -z ] && continue` returns 1 for every real row. Each ended
+the script mid-loop, after which it printed nothing and exited 0 — and **for a mutation harness,
+"no output, no survivors" is exactly what success looks like.** The tool built to hunt silent
+failures spent its first hour being one.
+
+So: any tool whose *success* is reported by an absence needs a guard that fails loudly when it did
+no work. The harness now refuses to exit 0 if zero mutants ran.
+
+The fifth bug is the sharper one. The field separator was `|`, which also occurs inside the code
+being mutated (`tab.conflict || tab.detached`), so one mutation was split mid-expression and
+applied malformed. **A malformed mutation injects a syntax error, fails every test at once, and
+reports a huge kill — a false result that looks better than a real one.** It was caught by a
+compile check added on general principle an hour earlier, which is the most direct argument for
+that check anyone could ask for: verify the mutant is valid code before believing what its failures
+mean.
+
+---
+
+## `test.fails()` is the wrong tool for a known-broken behaviour
+
+It passes when the body throws **for any reason at all** — a genuine assertion failure, a call to
+an undefined function, and a `throw` in setup are all reported identically as "expected fail". So
+it certifies *something went wrong in here*, not *this behaviour is broken as described*. A rename
+rots the test into failing for an unrelated reason and it keeps reporting green, which is what you
+want to see, so nobody looks.
+
+Its apparent advantage — going red when the fix lands, announcing itself — evaporates too: a test
+already failing for the wrong reason keeps failing after the fix, and announces nothing.
+
+**Use a characterisation test instead:** a plain assertion on the current, wrong value, green now
+and red the moment the defect is fixed, failing *specifically* on a value mismatch. Say in a header
+that it asserts wrong behaviour deliberately, and mark each assertion with what it should become.
+The fix is then a mechanical diff.
+
+---
+
 ## Measured, not estimated — and validate the instrument
 
 **Why.** Reading mode's column width was specified in `ch`, which is the advance width of the "0"
@@ -199,6 +239,37 @@ one of its inputs looking broken — a button that is present, enabled, and visi
 worse defect than the staleness being fixed, and it will be reported as broken because it is. The
 fix is usually to remove the control in the states where it cannot act, not to disable it: a
 disabled control needs a visible reason, and a tooltip is not one.
+
+---
+
+## Ask what the symptom will look like, and what people will blame
+
+Bundling related work into one change is normally right. **It stops being right when one item
+pre-loads a misdiagnosis of the other.**
+
+Two fixes were queued together here: a latent lock bug, and the new async command that would make
+it reachable. Landing them as one change would have been tidy — and the resulting symptom,
+intermittent UI stalls, would have looked exactly like the new feature being slow, which is
+precisely what everyone was already watching for. The wrong explanation would have been sitting
+there, plausible and ready. So the latent fix landed first, on its own, and any stall seen
+afterwards is genuinely attributable to the feature.
+
+The question to ask whenever a known-latent fix and a suspicious new feature are queued together:
+*what will the symptom look like, and what will people blame?* The fix is cheap now and expensive
+once it is competing with a convincing wrong answer.
+
+---
+
+## A negative claim is only worth its search
+
+"No reversed lock order found", "no other instance of this bug", "nothing else depends on that" —
+these are only worth saying if the search was exhaustive, and worth **more** when you say which it
+was. Reporting a negative from the sites you happened to be looking at reads identically to
+reporting one from every site there is.
+
+So: state the scope of the search alongside the result. *"Only these two functions take both locks,
+and both take them in the same order"* is a different claim from *"the two I looked at agreed"*,
+and only the first licenses anyone to stop worrying.
 
 ---
 
@@ -256,6 +327,22 @@ more than the finding was.
   Both incidents were recovered only because someone checked the reflog before doing anything else.
 
   The rules below still apply — a worktree removes the class of accident, not the need for care.
+
+  **Why the prohibition wasn't enough is worth stating, because it generalises.** A rule phrased as
+  *don't do X* invites arguing about scope, and a rule phrased as *the purpose is Y* invites
+  deciding your case doesn't serve Y. Neither violation here came from looking for a loophole —
+  both came from reading for the rule's purpose, concluding in good faith that this case didn't
+  engage it, and acting. A structure that removes the judgement needs neither reading.
+
+- **Announce the act, not the outcome.** *"The tree is back how you expect"* and *"I ran
+  `git checkout --` on a file in your working directory"* are different sentences, and only one is
+  a warning. Stating an effect reads as tidying; it lets the writer feel they disclosed something
+  while leaving the reader no way to connect a later surprise to its cause. That happened here —
+  a destructive operation was described by its result, in a status paragraph, and the person whose
+  file vanished spent time investigating a mystery that had already been "announced".
+
+  The general form: **a disclosure that does not name the action is not a disclosure.** If someone
+  would have to infer what you did, you did not say it.
 
 - **If someone else's work disappears, pin it before anything else.** `git tag wip/<what>
   <sha-from-reflog>` makes an orphaned commit permanently reachable and takes nothing from anyone.

@@ -267,4 +267,90 @@ mod tests {
         let coordinator = QuitCoordinator::new();
         coordinator.signal_ready(); // nothing to signal yet -- must not panic
     }
+    // ------------------------------------------------------ QA: the composition, on real disk
+    // Re-pointed for bd74d54: `begin_shutdown` is now private and the decision lives in
+    // `decide()`, so these drive that instead. The property under test is unchanged.
+
+    use crate::document::DocumentStore;
+    use std::sync::Arc;
+    use tempfile::Builder;
+
+    #[test]
+    fn qa_a_pending_write_reaches_real_disk_before_the_exit_is_allowed_to_proceed() {
+        let dir = Builder::new().prefix("medd-quit-").tempdir().unwrap();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "original").unwrap();
+
+        let store = Arc::new(DocumentStore::new());
+        let (_, hash) = store.read(&file).unwrap();
+
+        let coordinator = Arc::new(QuitCoordinator::new());
+        let decision = coordinator.decide();
+        assert!(decision.prevent, "the first exit-shaped event must be prevented");
+        let rx = decision.start_flush.expect("the first decision starts the flush");
+
+        let (c, s, f) = (coordinator.clone(), store.clone(), file.clone());
+        thread::spawn(move || {
+            s.write(&f, "edited just before quitting", &hash).unwrap();
+            c.signal_ready();
+        });
+
+        assert!(wait_for_quit_signal(&rx, QUIT_FLUSH_CEILING));
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "edited just before quitting",
+            "the flushed edit must be on disk by the time the exit is allowed to proceed"
+        );
+    }
+
+    #[test]
+    fn qa_a_frontend_that_never_reports_ready_still_lets_the_app_exit() {
+        let coordinator = QuitCoordinator::new();
+        let rx = coordinator.decide().start_flush.unwrap();
+        let start = std::time::Instant::now();
+        assert!(!wait_for_quit_signal(&rx, Duration::from_millis(80)));
+        assert!(start.elapsed() >= Duration::from_millis(80));
+
+        // And the exit that thread then triggers must be allowed through.
+        coordinator.mark_ready_to_exit();
+        assert!(!coordinator.decide().prevent, "the module's own exit must not be prevented");
+    }
+
+    #[test]
+    fn qa_a_quit_time_write_rejected_by_the_cas_leaves_the_external_change_intact() {
+        let dir = Builder::new().prefix("medd-quit-").tempdir().unwrap();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "original").unwrap();
+
+        let store = DocumentStore::new();
+        let (_, stale) = store.read(&file).unwrap();
+        std::fs::write(&file, "changed by someone else").unwrap();
+
+        let coordinator = QuitCoordinator::new();
+        let rx = coordinator.decide().start_flush.unwrap();
+
+        let rejected = store.write(&file, "medd's version", &stale).is_err();
+        coordinator.signal_ready();
+
+        assert!(rejected, "a stale-hash quit-time write must be rejected, not forced");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "changed by someone else");
+        assert!(wait_for_quit_signal(&rx, QUIT_FLUSH_CEILING));
+    }
+
+    #[test]
+    fn qa_a_repeat_request_during_a_stalled_flush_does_not_abandon_it() {
+        // The reversal, stated as the user-facing property rather than as a flag check: the
+        // impatient second press is the one the old rule discarded writes for.
+        let coordinator = QuitCoordinator::new();
+        let first = coordinator.decide();
+        assert!(first.prevent && first.start_flush.is_some());
+
+        for _ in 0..5 {
+            let again = coordinator.decide();
+            assert!(again.prevent, "a repeat press must still be prevented, not let through");
+            assert!(again.start_flush.is_none(), "and must not start a second flush");
+        }
+        // The flush the first decision started is still the only one, and still owns the exit.
+        assert!(!coordinator.is_ready_to_exit());
+    }
 }

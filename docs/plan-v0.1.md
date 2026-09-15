@@ -248,6 +248,37 @@ The watcher exists in v0.1 anyway because P-3 needs it.
 
 - Fuzzy filename match over the workspace, Enter to open, arrows to move, Esc to dismiss.
 - The file list is built lazily and cached; a workspace scan must not block the dialog opening.
+- **Cycle protection is by resolved-path identity, not a depth cap.** A directory symlink to an
+  ancestor — `notes/loop -> ../` — makes the walk unbounded, re-enumerating the same documents at
+  every level. `dir_list` never had to care because it descends one level, and `fs::metadata()`
+  follows links deliberately here (the dangling-symlink test depends on it). The failure mode is
+  the bad one: no crash, no error, no result, a threadpool worker spinning forever while quick-open
+  never populates — indistinguishable from a slow walk, on the one operation whose whole promise is
+  that it does not block. **A depth cap converts an infinite walk into a silently wrong one**,
+  which is worse: it stops, omits everything past the cap, and looks like a correct result.
+- **The walk copies the workspace root out of the lock and releases it before touching the
+  filesystem.** `commands.rs` holds `Mutex<Option<Workspace>>` across `dir_list` today, which is
+  safe *only* because that call returns in microseconds. An async walk holding the same lock for
+  its duration would block every sync command — and sync commands run on the main thread, so the UI
+  would freeze for the length of the walk. Exactly the outcome the async command exists to avoid,
+  reached by holding a lock the old code could hold safely. Testable directly: take the lock on
+  another thread mid-walk and confirm it is available.
+- **"Must not block the dialog opening" is two claims and needs both.** As written it has no
+  threshold and no observable, so it cannot fail — the same shape as increment 10's E2E deliverable
+  before its timing constraint was stated. The testable half: the dialog renders and accepts
+  keystrokes **while the walk promise is still pending** — assert against an *unresolved* promise,
+  since a test that awaits the walk first proves nothing about ordering. The measured half: a
+  number on a real workspace, which belongs on increment 12's list beside the large-document
+  thresholds. Whether the command carries `async` is a macro attribute and no unit test can see it.
+- **The fixture must contain what the filters exclude.** A `node_modules` exclusion test passes
+  trivially against a fixture with no `node_modules` — this project has already shipped that
+  mistake once, in a harness fixture claiming R-1…R-7 coverage with no images in it.
+- **Cache invalidation needs the half that establishes a stale result would otherwise be served**,
+  or the other half proves nothing. And invalidation **marks stale rather than re-walking**, or a
+  `cargo build` becomes a sequence of full workspace walks.
+- **Every ignore rule carries a mutant** in `scripts/mutants.sh`. A rule with no mutant is a rule
+  nothing is checking, and the harness is where that stays visible rather than depending on anyone
+  remembering.
 - Scoring can be simple. This increment is small and should stay small.
 
 ---
@@ -268,6 +299,33 @@ Deliberately late: the fiddliest platform work, and nothing above depends on it.
   called by all three. `RunEvent::Reopen` carries no paths and never enters the router.
 - `RunEvent::Opened` wired now even though Finder registration is v0.2, so adding the file
   association later is a manifest change rather than an architectural one.
+- **There are four entry points carrying paths, not three, and the fourth is deferred.**
+  `WindowEvent::DragDrop` delivers `Vec<PathBuf>` from the webview layer — neither `argv` nor an
+  Apple Event — so it bypasses both listeners below. It is enabled by default and unhandled, so
+  dropping a file on medd's window currently does nothing. **Scoped to v0.2** with Finder
+  registration (see scope-mvp.md), because it is the same family and splitting them would be
+  incoherent. Recorded here so the next person enumerating finds four and a note rather than three
+  and a gap. When it lands it is one more listener calling `route_open` — and it is the one
+  listener that never needs the pending-open buffer, since a drop requires a live window and a
+  ready frontend. That must be **deliberate rather than incidental**: it shares the code path that
+  buffers.
+
+  `tao` registers exactly seven `NSApplicationDelegate` methods, which makes this enumeration
+  closed rather than merely long — anything absent cannot reach medd whatever `Info.plist` says.
+  Handoff and inbound Services are registered but inert (`NSUserActivityTypes` and `NSServices` are
+  undeclared), and `applicationShouldTerminate:` is registered by nothing, which is the Cmd+Q
+  finding already in hand.
+- **Verification is per entry point, not per function.** Both bugs found in this subsystem were in
+  the *wiring*, not the router: Cmd+Q never reached the hook, and window-close reached it too late.
+  In both cases the thing being called was correct and a test of it would have passed. So a green
+  `route_open` suite is exactly what *covering one is indistinguishable from covering all* looks
+  like — it tests the one part of this subsystem that has never been broken.
+
+  The criterion: **for each listener, break only that listener's call into the router, and confirm
+  exactly one test fails, and that it is the test named for that listener.** Zero failures means
+  that listener is untested whatever coverage reports. Failures named for a *different* listener
+  mean the tests do not distinguish the routes. The `route_open` unit tests are still worth having;
+  they are simply not evidence about the thing that keeps breaking.
 - **The pending-open buffer.** `RunEvent::Opened` can fire before the WebView has attached its
   listeners. Opens are buffered in Rust state and drained by `frontend_ready()`. A cold launch
   goes through this buffer every time — it is the normal path, not the exception.
@@ -568,6 +626,11 @@ of currently-open documents — the worst subset.
   healthy writes take as long as they need, one stalled write still times out. §8 sets no cap on
   open tab count, so enough dirty tabs to hit a flat bound with nothing actually wrong is reachable
   in principle. Do this if the soak test or the no-cap decision makes the flat bound bite.
+- **One drag inside the editor.** `drag_drop_enabled: true` installs Tauri's own drag handler on
+  the webview, and Tauri's docs say disabling it is required for HTML5 drag-and-drop on the
+  frontend **on Windows** — so macOS is probably unaffected. But CodeMirror uses HTML5
+  drag-and-drop to move selected text, which E-6's "standard editing affordances" implies, and
+  nobody has looked. Probably nothing; cheap to check; annoying to find after shipping.
 - **Manual pass:** window focus on second launch (checked, not asserted); WKWebView clipboard and
   IME; macOS keybindings; reading typography in both themes.
 - **Restore debug symbols for release diagnosis, or decide not to.** The skeleton set

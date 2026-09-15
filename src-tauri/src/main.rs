@@ -114,6 +114,7 @@ fn main() {
         .manage(Mutex::new(None::<workspace::Workspace>))
         .manage(quit::QuitCoordinator::new())
         .manage(quickopen::FileIndex::new())
+        .manage(document::TempSweeper::new())
         .setup(|app| {
             let (fs_watcher, rx) =
                 watcher::FsWatcher::new().expect("failed to start filesystem watcher");

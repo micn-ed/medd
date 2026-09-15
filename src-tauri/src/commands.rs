@@ -2,7 +2,7 @@
 //! workspace that knows Tauri's command macros exist — everything else stays plain Rust,
 //! directly unit-tested, and commands.rs stays a thin translation layer over it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::document::{ContentHash, DocumentStore};
+use crate::document::{ContentHash, DocumentStore, TempSweeper};
 use crate::error::MeddError;
 use crate::quickopen::{FileIndex, QuickOpenEntry};
 use crate::quit::QuitCoordinator;
@@ -133,8 +133,25 @@ pub fn document_write(
     content: String,
     expected_hash: ContentHash,
     store: State<'_, DocumentStore>,
+    sweeper: State<'_, TempSweeper>,
 ) -> Result<ContentHash, MeddError> {
-    store.write(&path, &content, &expected_hash)
+    let hash = store.write(&path, &content, &expected_hash)?;
+
+    // Litter is created by writes, so the set of directories that can hold an abandoned staging
+    // file is exactly the set medd has written to — which makes here the narrowest place that
+    // still covers all of it, and keeps `dir_list` a read that only reads. Deliberately *after*
+    // `store.write` returns, so the store's mutex is released first: that one lock serialises
+    // every read and write across every open document, and a `read_dir` plus a lock attempt per
+    // entry inside it would put directory-scan latency on every write in every tab.
+    if let Some(dir) = path
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+    {
+        sweeper.sweep_once(&dir);
+    }
+
+    Ok(hash)
 }
 
 /// Every `.md` file in the open workspace, for quick-open (Cmd+P, plan-v0.1.md increment 9, W-5).

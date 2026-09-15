@@ -113,6 +113,18 @@ pub struct TreeEntry {
     pub kind: EntryKind,
 }
 
+/// Whether `file_name` names a Markdown document, by the only rule medd has: the extension.
+///
+/// Lives here because path classification is this module's job (architecture.md §2), and it is a
+/// function rather than a literal because two places need the same answer and must not drift:
+/// `dir_list`, deciding what the tree offers as openable, and `document.rs`'s staging-file sweep,
+/// deciding whether an abandoned temp file could have been medd's. Those are the same question
+/// asked from two directions, and a second `ends_with(".md")` somewhere else is how they would
+/// quietly stop agreeing.
+pub fn is_markdown(file_name: &str) -> bool {
+    file_name.to_lowercase().ends_with(".md")
+}
+
 /// Lists one level of `dir` — never recurses, so an enormous workspace never gets walked before
 /// the window appears (N-2). Hidden entries (dotfiles, `.git`, editor state directories,
 /// `node_modules`, `target` — see `is_ignored_name`) are omitted by default: see the increment-3
@@ -142,7 +154,7 @@ pub fn dir_list(dir: &Path) -> Result<Vec<TreeEntry>, MeddError> {
         let path = canonical_dir.join(&name);
         let kind = match fs::metadata(&path) {
             Ok(meta) if meta.is_dir() => EntryKind::Directory,
-            Ok(_) if name_str.to_lowercase().ends_with(".md") => EntryKind::Markdown,
+            Ok(_) if is_markdown(&name_str) => EntryKind::Markdown,
             // Includes a dangling symlink: metadata() follows the link and fails, so it's shown
             // but inert rather than dropped from the listing or treated as a crash.
             _ => EntryKind::Other,
