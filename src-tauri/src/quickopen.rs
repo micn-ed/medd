@@ -20,7 +20,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
-use crate::workspace::is_ignored_name;
+use crate::workspace::{is_ignored_name, is_markdown};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,7 +107,7 @@ fn walk_markdown_files(root: &Path) -> Vec<QuickOpenEntry> {
 
             if file_type.is_dir() {
                 stack.push(path);
-            } else if name_str.to_lowercase().ends_with(".md") {
+            } else if is_markdown(&name_str) {
                 let relative_path = path
                     .strip_prefix(root)
                     .unwrap_or(&path)
@@ -126,6 +126,47 @@ fn walk_markdown_files(root: &Path) -> Vec<QuickOpenEntry> {
 
 #[cfg(test)]
 mod tests {
+    // The walk asks "is this a document medd opens" with `workspace::is_markdown`, the same
+    // predicate the sidebar's own classification uses -- not a second `ends_with(".md")`. This
+    // pins that they agree, including the case-insensitivity `dir_list` already had: a workspace
+    // containing SHOUTING.MD must offer it in Cmd+P, because the tree calls it Markdown too.
+    #[test]
+    fn the_walk_and_the_tree_agree_on_what_markdown_is() {
+        use super::*;
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for name in ["note.md", "SHOUTING.MD", "MiXeD.Md", "photo.png", "README"] {
+            fs::write(root.join(name), "x").unwrap();
+        }
+
+        let mut walked: Vec<String> = walk_markdown_files(&root)
+            .into_iter()
+            .map(|e| e.relative_path)
+            .collect();
+        walked.sort();
+
+        let mut listed: Vec<String> = crate::workspace::dir_list(&root)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == crate::workspace::EntryKind::Markdown)
+            .map(|e| e.name)
+            .collect();
+        listed.sort();
+
+        assert_eq!(
+            walked, listed,
+            "quick-open must offer exactly what the tree calls Markdown"
+        );
+        assert_eq!(
+            walked.len(),
+            3,
+            "expected the three .md files, case-insensitively"
+        );
+    }
+
     use super::*;
     use std::fs;
     use tempfile::tempdir;
