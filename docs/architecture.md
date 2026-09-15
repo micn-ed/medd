@@ -527,9 +527,21 @@ copied — is free for a compare-and-swap write that has just read the file, and
 state files on first run.** Left as-is, the very first `state.json` save returns `NotFound`, and so
 does the directory above it: Tauri's path API *resolves* Application Support, it does not create
 it. Both fail only on a fresh install, which is the one configuration the person building this is
-least likely to be in. And **the caller supplies the mode for a newly created file**, since there
-is no target to copy from: `0o644` for documents, `0o600` for state, which records the paths of
-everything the user works on.
+least likely to be in. And **the caller supplies a create-or-refuse policy**, not merely a mode —
+`WhenAbsent::Fail` for documents, `WhenAbsent::Create { mode: 0o600 }` for state.
+
+An earlier version of this ruling said "the caller supplies the mode", and that was wrong in a way
+a surviving mutant exposed. `DocumentStore::write` reaches the write having *just re-read the
+document* for its hash comparison, so an absent target there means the file was **deleted
+underneath us** — and creating it would silently recreate a file the user deleted, which §3 forbids
+in as many words. The old code refused *by accident*, because it read the target's permissions
+unconditionally. **A bare mode parameter would have converted that accident into a recreation.**
+The mode reasoning stands; it needed the create-or-refuse decision in front of it.
+
+Flipping the document call site to `Create` kills no test, and that is expected rather than a gap:
+the compare-and-swap makes an absent target a microsecond race rather than a reachable state, so
+the choice is correct **by construction, not by coverage.** That is recorded at the call site,
+because a surviving mutant is otherwise an invitation to decide the distinction does not matter.
 
 **State-file staging litter is never swept, and that is accepted.** The sweep is guarded to
 Markdown targets, so `.medd-state.json.tmp` is correctly not medd's business as far as that guard

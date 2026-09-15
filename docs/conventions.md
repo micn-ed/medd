@@ -514,6 +514,24 @@ more than the finding was.
 
 ---
 
+## Operational documents reference; they do not restate
+
+A plan or a checklist that **restates** a mechanism has to be updated in lockstep with the design
+document that owns it — and there is no link back, so nobody knows to. Twice on this project a
+ruling changed, the design document was rewritten, and the operational one kept a row describing
+the superseded mechanism. What made it invisible both times is that the stale row was still
+**true-sounding and on-topic**: it read as current because it was about the right subject.
+
+The fix is structural rather than vigilance. **A row that says "see architecture.md §3 for the
+mechanism" cannot go stale, because it holds no mechanism to be stale.** Keep the *decision* and
+the *why* in the operational document — those are what an implementer needs to sequence work — and
+let the *how* live in one place with a pointer to it.
+
+This is the shared-predicate rule one level up: **an operational document is a caller, and a caller
+that restates the answer instead of asking for it drifts.**
+
+---
+
 ## Sharing a checkout
 
 - **The working tree belongs to whoever is mid-increment.** Reviews, documentation edits and
