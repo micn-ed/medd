@@ -260,6 +260,19 @@ is what makes that true in every case rather than most of them — increment 7's
 un-scheduled version left "Keep mine" unsaved indefinitely whenever the conflict was discovered by
 a rejected compare-and-swap write, since that write had already spent the only timer in flight.
 
+**A conflicted tab does not flush when it is closed, or when medd quits — and this is the one
+place the product knowingly discards typed text.** The autosave path declines to write while a tab
+is in conflict, which is correct: closing a tab or quitting the app must not silently pick a side
+in a disagreement the user has been asked to resolve, and prompting would contradict P-2's promise
+that closing is always safe. But it means the on-screen banner is the *entire* warning, and a user
+who has stopped noticing it loses those edits on quit.
+
+It is recorded here as a decision rather than left as a property nobody named. The cost is real and
+is accepted because the alternatives are worse: writing the user's version would resolve the
+conflict on their behalf, writing the disk version would discard their edits with even less signal,
+and asking would reintroduce the modal save prompt D-5 exists to remove. If anything softens this
+later it should be the banner becoming harder to ignore, not the close path becoming cleverer.
+
 The consequence to be honest about: **"Keep mine" discards the disk version within about a second,
 and the user has never seen it.** `Diff…` is a desirable third option on that banner and is
 explicitly **not** v0.1; with it deferred, the banner's own wording is what tells the user that

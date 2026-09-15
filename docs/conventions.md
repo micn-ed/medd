@@ -73,6 +73,39 @@ without its method gets "corrected" back by the next reader who thinks it looks 
 
 ---
 
+## Store the inputs, derive the fact
+
+When two or more inputs determine a presentational fact, **store the inputs and derive the fact.**
+Storing the fact requires every input's handler to remember to update it, and one of them always
+forgets.
+
+Three instances, and the third is what made it a rule:
+
+- **Dirty state** was derived from the start — `currentText !== lastSyncedText`. A derived value
+  cannot fall out of sync with reality; a flag can.
+- **The line-ending convention** was stored, then deleted in favour of detecting it from bytes just
+  proven to be on disk. The stored version created a three-way hazard between `document_close`, the
+  close-flush and a write, in which a CRLF file would have been silently rewritten to LF. The
+  derived version cannot, because there is no stored value to go stale.
+- **Sidebar visibility** was stored as `sidebarCollapsed` and written by *two* concerns — the
+  user's toggle, and reading mode. Reading mode remembered to set it; nothing remembered to unset
+  it. Once view mode became per-tab there was no single place that *could* have, so one tab's
+  reading mode collapsed the sidebar for every other tab.
+
+**The name is part of the rule.** `sidebarCollapsed` reads like the thing on screen, which is
+precisely the invitation that produced the bug: someone who wants the sidebar hidden assigns to the
+variable that appears to mean "the sidebar is hidden". Name a stored input for what it records —
+`sidebarHiddenByUser` — so the next person has to notice it is an answer to a question rather than
+the state of the world.
+
+**And check what the change does to the controls.** Deriving a fact can leave a control that writes
+one of its inputs looking broken — a button that is present, enabled, and visibly does nothing is a
+worse defect than the staleness being fixed, and it will be reported as broken because it is. The
+fix is usually to remove the control in the states where it cannot act, not to disable it: a
+disabled control needs a visible reason, and a tooltip is not one.
+
+---
+
 ## Authorship and acceptance are separate
 
 Whoever writes an increment writes its tests too — that is how correct code gets written, not a
