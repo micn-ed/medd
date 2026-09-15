@@ -12,8 +12,8 @@ export default defineConfig(({ mode }) => ({
   // `npm run harness` swaps Tauri's IPC for an in-memory fixture so the frontend runs in an
   // ordinary browser and can be inspected by eye. See src/harness/tauriMock.ts for what this
   // does and does not prove. Never active in a normal dev or production build.
-  resolve:
-    mode === 'harness'
+  resolve: {
+    ...(mode === 'harness'
       ? {
           alias: {
             '@tauri-apps/api/core': fileURLToPath(
@@ -24,7 +24,15 @@ export default defineConfig(({ mode }) => ({
             ),
           },
         }
-      : {},
+      : {}),
+    // Vitest resolves Svelte's package exports with Node's default conditions, which picks
+    // Svelte 5's server (SSR) build — @testing-library/svelte then calls a client-only mount API
+    // that build doesn't have, and every component test fails with `lifecycle_function_unavailable`
+    // before it renders anything. Forcing the `browser` condition under Vitest (never in a normal
+    // dev server or production build, where Vite already resolves this correctly) is what makes
+    // component tests exercise the actual client-side Svelte runtime the app ships.
+    ...(process.env.VITEST ? { conditions: ['browser'] } : {}),
+  },
 
   test: {
     environment: 'jsdom',

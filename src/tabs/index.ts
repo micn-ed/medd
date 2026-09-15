@@ -13,6 +13,8 @@ export {
   setActiveTab,
   setActiveTabViewMode,
   setOnDocChanged,
+  setOnTabClosing,
+  currentGeneration,
   markSynced,
   markConflict,
   markDetached,

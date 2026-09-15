@@ -5,7 +5,7 @@
 // update listener that keeps currentText and the retained state honest.
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { EditorView } from '@codemirror/view'
-import { closeAllTabs, editorStateFor, getTab, openTab } from '../tabs'
+import { closeAllTabs, closeTab, editorStateFor, getTab, openTab } from '../tabs'
 
 const { invokeMock, listeners } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -239,7 +239,7 @@ describe('Keep mine', () => {
     expect(invokeMock).not.toHaveBeenCalled() // no immediate write
   })
 
-  test('the debounce already pending from the edit that caused the conflict still fires normally, using the new hash', async () => {
+  test('a debounce already pending from the edit that caused the conflict still results in exactly one write', async () => {
     openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
     edit('/workspace/a.md', 'X') // starts the ~1s debounce
     fireBackendEvent('document:changed-on-disk', {
@@ -247,20 +247,253 @@ describe('Keep mine', () => {
       content: 'v2',
       hash: 'h2',
     })
-    keepMine('/workspace/a.md') // does not touch the pending timer, only the CAS baseline
-
     invokeMock.mockResolvedValue('h3')
-    await vi.advanceTimersByTimeAsync(1000) // the timer from the edit above fires
+    keepMine('/workspace/a.md') // reschedules on top of the still-pending timer from the edit
 
-    // "The user's next keystroke is what commits the decision" (architecture.md §3) falls out
-    // of dirty being derived, not from any special-cased immediate write in keepMine() itself —
-    // this is that same mechanism, just via the timer that was *already* running rather than a
-    // brand new keystroke, which is equally valid and arguably the more common real case.
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(invokeMock).toHaveBeenCalledTimes(1)
     expect(invokeMock).toHaveBeenCalledWith('document_write', {
       path: '/workspace/a.md',
       content: 'v1X',
       expectedHash: 'h2',
     })
+  })
+
+  // increment-7 review, finding 2 (blocker): resolveConflictKeepMine is a pure state transition
+  // with no I/O, so whether "Keep mine" ever reached disk used to depend entirely on a debounce
+  // timer happening to survive the conflict — and on the plan's own named route (a rejected CAS
+  // write), it never does: the timer fired *to perform* that write, so it's spent by the time the
+  // conflict exists. keepMine() now schedules unconditionally on resolution so this is no longer
+  // a coincidence.
+  test('a rejected CAS write spends the pending timer, but Keep mine schedules its own and the write still lands', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    invokeMock.mockRejectedValueOnce({
+      kind: 'Conflict',
+      currentContent: 'v2 from elsewhere',
+      hash: 'h2',
+    })
+    edit('/workspace/a.md', 'X')
+
+    await vi.advanceTimersByTimeAsync(1000) // the timer fires, the write is rejected as a conflict
+
+    expect(getTab('/workspace/a.md')?.conflict).toEqual({
+      diskContent: 'v2 from elsewhere',
+      diskHash: 'h2',
+    })
+    expect(invokeMock).toHaveBeenCalledTimes(1) // the one rejected attempt -- no timer survives it
+
+    invokeMock.mockResolvedValue('h3')
+    keepMine('/workspace/a.md')
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(invokeMock).toHaveBeenCalledTimes(2)
+    expect(invokeMock).toHaveBeenLastCalledWith('document_write', {
+      path: '/workspace/a.md',
+      content: 'v1X',
+      expectedHash: 'h2',
+    })
+  })
+})
+
+// QA's acceptance pass on increment 7, finding 1 (blocker): closing a tab used to silently drop
+// whatever the debounce hadn't yet written -- `debounceTimers` is keyed by path, `closeTab` never
+// touched it, and by the time the timer fired `getTab(path)` returned nothing. "Always safe, never
+// prompts" (P-2) was false for exactly the ordinary gesture of fixing a typo and hitting Cmd+W
+// inside the one-second window.
+describe('closing a tab flushes a pending autosave rather than dropping it (QA finding 1)', () => {
+  test('typing then closing within the debounce window still reaches disk', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    invokeMock.mockResolvedValue('h2')
+    edit('/workspace/a.md', 'X') // starts the ~1s debounce
+
+    closeTab('/workspace/a.md') // the user closes before the debounce fires
+
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(invokeMock).toHaveBeenCalledWith('document_write', {
+      path: '/workspace/a.md',
+      content: 'v1X',
+      expectedHash: 'h1',
+    })
+  })
+
+  test('closing a clean tab writes nothing -- there is nothing to flush', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    closeTab('/workspace/a.md')
+
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(invokeMock).not.toHaveBeenCalled()
+  })
+
+  test('closing a tab whose write already completed does not write a second time', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    invokeMock.mockResolvedValue('h2')
+    edit('/workspace/a.md', 'X')
+    await vi.advanceTimersByTimeAsync(1000) // the debounce fires and completes normally
+
+    closeTab('/workspace/a.md') // nothing pending left to flush
+
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(invokeMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('closeAllTabs (the D-14 workspace switch) flushes every open tab at once', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    edit('/workspace/a.md', 'X')
+    openTab('/workspace/b.md', 'v1', 'h1', '/workspace')
+    edit('/workspace/b.md', 'Y')
+    invokeMock.mockResolvedValue('hnew')
+
+    closeAllTabs()
+
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(invokeMock).toHaveBeenCalledWith('document_write', {
+      path: '/workspace/a.md',
+      content: 'v1X',
+      expectedHash: 'h1',
+    })
+    expect(invokeMock).toHaveBeenCalledWith('document_write', {
+      path: '/workspace/b.md',
+      content: 'v1Y',
+      expectedHash: 'h1',
+    })
+  })
+
+  // A third route the leader's review found: no pending *timer* at close time (so the check
+  // above finds nothing to flush), but a second edit arrived while the first write was already in
+  // flight, and got captured as a queued follow-up rather than issued directly (see `requestWrite`
+  // in doc.ts). The old `pendingRetry` mechanism re-read the tab when that follow-up finally ran,
+  // which is exactly what a closed tab can no longer provide -- a real, on-screen edit ("v1AB")
+  // vanished. The fix captures the follow-up's content up front, so it needs nothing from the tab
+  // by the time it fires.
+  test('a write queued behind an in-flight one still reaches disk after the tab closes', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    let resolveFirstWrite: (hash: string) => void = () => {}
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirstWrite = resolve
+        }),
+    )
+    edit('/workspace/a.md', 'A')
+    await vi.advanceTimersByTimeAsync(1000) // tick 1 fires; document_write("v1A") is now in flight
+
+    edit('/workspace/a.md', 'B')
+    await vi.advanceTimersByTimeAsync(1000) // tick 2 fires; a write is already in flight -> queued
+
+    expect(invokeMock).toHaveBeenCalledTimes(1) // queued, not sent -- no second call yet
+
+    closeTab('/workspace/a.md') // no pending timer left to flush; the queue already has "v1AB"
+
+    invokeMock.mockResolvedValue('h3') // what the queued write will receive once it fires
+    resolveFirstWrite!('h2') // the first write lands
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(invokeMock).toHaveBeenCalledTimes(2)
+    expect(invokeMock).toHaveBeenLastCalledWith('document_write', {
+      path: '/workspace/a.md',
+      content: 'v1AB',
+      expectedHash: 'h2', // chained onto the first write's real new hash, not the stale one
+    })
+  })
+})
+
+// Increment-7 review finding 3 / QA's integration hazard (blocker D): §3's flowchart has no
+// notion of a write being in flight when the tab's state moves underneath it. `performAutosave`
+// captures a per-path generation before its `await`; if anything moved the generation while the
+// write was airborne, its outcome is dropped rather than applied -- "a write's outcome may only
+// be applied to the state that issued it" (architecture.md §3). Deferred promises stand in for
+// `document_write` here so a write can be held "in flight" across other calls in the same test.
+describe("a write's outcome is dropped if the tab's state moved while it was in flight (review finding 3)", () => {
+  test('3a: a write settling after Reload does not clobber the resolved state', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    let resolveWrite: (hash: string) => void = () => {}
+    invokeMock.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveWrite = resolve
+      }),
+    )
+    edit('/workspace/a.md', 'X')
+    await vi.advanceTimersByTimeAsync(1000) // debounce fires; document_write is now in flight
+
+    fireBackendEvent('document:changed-on-disk', {
+      path: '/workspace/a.md',
+      content: 'DISK',
+      hash: 'hDISK',
+    })
+    expect(getTab('/workspace/a.md')?.conflict).not.toBeNull() // still dirty -- write hasn't settled
+
+    reload('/workspace/a.md') // resolved before the stale write below settles
+
+    resolveWrite!('hSTALE')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const tab = getTab('/workspace/a.md')
+    expect(tab?.currentText).toBe('DISK')
+    expect(tab?.lastSyncedText).toBe('DISK') // not clobbered by the stale write's own text
+    expect(tab?.expectedHash).toBe('hDISK') // not overwritten with the stale write's hash
+    expect(tab?.conflict).toBeNull() // still resolved, not resurrected
+  })
+
+  test('3a: a stale write rejected as Conflict after Reload does not resurrect the banner', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    let rejectWrite: (err: unknown) => void = () => {}
+    invokeMock.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        rejectWrite = reject
+      }),
+    )
+    edit('/workspace/a.md', 'X')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    fireBackendEvent('document:changed-on-disk', {
+      path: '/workspace/a.md',
+      content: 'DISK',
+      hash: 'hDISK',
+    })
+    reload('/workspace/a.md')
+
+    rejectWrite!({ kind: 'Conflict', currentContent: 'stale conflict', hash: 'hStaleConflict' })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // A banner reappearing here would be exactly what D-11's own rationale calls fatal: one
+    // firing on a buffer nobody has touched since it was resolved.
+    expect(getTab('/workspace/a.md')?.conflict).toBeNull()
+  })
+
+  test('3b: closing and reopening during an in-flight write does not clobber the reopened tab', async () => {
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    let resolveWrite: (hash: string) => void = () => {}
+    invokeMock.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveWrite = resolve
+      }),
+    )
+    edit('/workspace/a.md', 'X')
+    await vi.advanceTimersByTimeAsync(1000) // debounce fires; write in flight with expectedHash h1
+
+    closeTab('/workspace/a.md') // nothing pending to flush -- the write is already airborne
+
+    // A fresh read from disk, unrelated to the stale in-flight write above.
+    openTab('/workspace/a.md', 'FRESH FROM DISK', 'hFresh', '/workspace')
+
+    resolveWrite!('hSTALE')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const tab = getTab('/workspace/a.md')
+    expect(tab?.currentText).toBe('FRESH FROM DISK')
+    expect(tab?.lastSyncedText).toBe('FRESH FROM DISK') // not clobbered by the stale write
+    expect(tab?.expectedHash).toBe('hFresh')
   })
 })
 

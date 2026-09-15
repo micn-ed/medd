@@ -60,6 +60,37 @@ export function setOnDocChanged(fn: (path: string) => void): void {
   onDocChanged = fn
 }
 
+// Same registration pattern, for the opposite edge of a tab's life: doc/ needs to know a tab is
+// *about* to close so it can flush a still-pending autosave before the tab (and the state that
+// write would target) disappears (increment-7 QA finding 1 — closing a tab used to silently drop
+// whatever hadn't been written yet, since the timer fires after `getTab` can no longer find it).
+let onTabClosing: ((path: string) => void) | null = null
+
+export function setOnTabClosing(fn: (path: string) => void): void {
+  onTabClosing = fn
+}
+
+// A per-path "has anything about this document's sync state moved" counter, kept independently of
+// the `Tab` object's own lifetime (increment-7 review finding 3 / QA's integration hazard). It is
+// deliberately *not* a field on `Tab`: a write can still be in flight after its tab has been
+// closed and a *different* tab object opened at the same path (close-then-reopen while a stale
+// write is airborne), and a counter tied to the old object's identity would have nothing to
+// compare against for the new one. Bumped by every transition that changes what a write's outcome
+// would mean — conflict raised, external content applied, a conflict resolved, detachment, or the
+// tab closing outright — so `doc/`'s `performAutosave` can capture the value before its `await`
+// and safely drop a result that no longer describes anything real, without ever needing to know
+// *why* it moved. Never cleared (same class of session-lifetime growth as Rust's `last_known`
+// until `document_close` exists — see architecture.md §8's drift ledger).
+const generations = new Map<string, number>()
+
+function bumpGeneration(path: string): void {
+  generations.set(path, (generations.get(path) ?? 0) + 1)
+}
+
+export function currentGeneration(path: string): number {
+  return generations.get(path) ?? 0
+}
+
 let tabs = $state<Tab[]>([])
 let activePath = $state<string | null>(null)
 
@@ -148,10 +179,19 @@ export function openTab(
 
 /** Closes a tab, freeing its retained state — no buffer cache, no recently-closed retention.
  * Always safe, never prompts (P-2): nothing here is unsaved in any sense autosave hasn't already
- * made safe, and keeping that true is doc/'s job as it schedules and completes writes. */
+ * made safe, and keeping that true is doc/'s job as it schedules and completes writes — which
+ * means flushing a still-pending one *before* this function makes the tab impossible to find.
+ * The flush hook fires, and the write it may kick off starts running, before `bumpGeneration`:
+ * that write's own capture of "the current generation" happens while the tab this edit belongs to
+ * is still the live one, so its outcome is treated as legitimate rather than immediately stale —
+ * it only becomes droppable if *something else* moves the generation again before it resolves
+ * (e.g. this same path gets reopened before the flushed write lands, increment-7 review 3b). */
 export function closeTab(path: string): void {
   const index = tabs.findIndex((t) => t.path === path)
   if (index === -1) return
+
+  onTabClosing?.(path)
+  bumpGeneration(path)
 
   tabs.splice(index, 1)
   editorStates.delete(path)
@@ -173,8 +213,15 @@ export function setActiveTabViewMode(mode: ViewMode): void {
 }
 
 /** Closes every open tab — used when switching workspaces (a new tree has no relationship to
- * whatever was open before). */
+ * whatever was open before). Same flush-before-close obligation as `closeTab`, for every tab at
+ * once (increment-7 QA finding 1: the D-14 workspace switch used to drop every open tab's pending
+ * edit simultaneously). */
 export function closeAllTabs(): void {
+  for (const tab of tabs) {
+    onTabClosing?.(tab.path)
+    bumpGeneration(tab.path)
+  }
+
   tabs = []
   editorStates.clear()
   mountedView = null
@@ -199,6 +246,7 @@ export function markConflict(path: string, diskContent: string, diskHash: string
   const tab = getTab(path)
   if (!tab) return
   tab.conflict = { diskContent, diskHash }
+  bumpGeneration(path)
 }
 
 /** D-11's deletion branch: the tab stays open holding its text; autosave is suspended (again, by
@@ -207,6 +255,7 @@ export function markDetached(path: string): void {
   const tab = getTab(path)
   if (!tab) return
   tab.detached = true
+  bumpGeneration(path)
 }
 
 /**
@@ -239,6 +288,7 @@ export function applyExternalContent(path: string, newContent: string, newHash: 
     tab.lastSyncedText = newContent
     tab.expectedHash = newHash
     tab.conflict = null
+    bumpGeneration(path)
   }
 }
 
@@ -254,6 +304,7 @@ export function resolveConflictKeepMine(path: string): void {
   tab.lastSyncedText = tab.conflict.diskContent
   tab.expectedHash = tab.conflict.diskHash
   tab.conflict = null
+  bumpGeneration(path)
 }
 
 /** A minimal single-range diff: the common prefix and suffix are trimmed, leaving just the
