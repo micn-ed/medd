@@ -320,6 +320,27 @@ Two things to do with it:
   *Shaping is unit-verified; hook choice is gesture-verified, and one gesture is deferred* is
   honest. A single claim covering both retires the half nobody can check.
 
+## A mock of a dependency cannot testify about that dependency
+
+`MockRuntime` and `tauri-runtime-wry` are separate implementations of one trait. A test asserting
+that `CloseRequested` arrives before the window is destroyed pins **the mock's** ordering; the
+ordering the product depends on is the real runtime's. The result would be green, would terminate,
+and would say nothing about the code that ships — **while looking exactly like a guard on the
+premise the design rests on.**
+
+That was investigated and declined here rather than built. Where a claim is a fact about a
+*dependency* rather than about your own code, a mock cannot establish it, and a test that appears
+to is worse than no test. The honest alternatives — reading the dependency's source, and re-reading
+it after an upgrade, or a real gesture — are both worse than a test, and both beat manufacturing a
+green tick.
+
+**The strongest form of the vacuity discipline is declining to build the vacuous thing when you
+could.** Every other instance on this project was caught after the fact. This one was a test that
+would have passed, terminated, and been reported as coverage — and the person about to build it
+stopped, because they recognised the shape in their own work.
+
+---
+
 An end-to-end test exercises the real thing, which makes it feel like the strongest evidence
 available. Often it is the *weakest*, because the real thing is nondeterministic and the test can
 only fail when the environment happens to cooperate.

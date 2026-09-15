@@ -678,6 +678,14 @@ of currently-open documents — the worst subset.
   healthy writes take as long as they need, one stalled write still times out. §8 sets no cap on
   open tab count, so enough dirty tabs to hit a flat bound with nothing actually wrong is reachable
   in principle. Do this if the soak test or the no-cap decision makes the flat bound bite.
+- **Window-close ordering is verified by reading `tauri-runtime-wry`, and re-verified by reading
+  it again after any Tauri upgrade.** Worse than a test, and the only thing available:
+  `MockRuntime` cannot drive medd's exit handling at all. Its run loop breaks on exactly one
+  condition — the window map emptying with the resulting `ExitRequested` *not* prevented — medd's
+  handler prevents on precisely that path, and the mock's message enum has no `RequestExit`, so
+  `AppHandle::exit(0)`, medd's escape from its own prevented exit, does nothing under it. Driving
+  the real exit handling under the mock **hangs by construction**. See conventions.md on why the
+  terminating consolation test was declined.
 - **One drag inside the editor.** `drag_drop_enabled: true` installs Tauri's own drag handler on
   the webview, and Tauri's docs say disabling it is required for HTML5 drag-and-drop on the
   frontend **on Windows** — so macOS is probably unaffected. But CodeMirror uses HTML5
