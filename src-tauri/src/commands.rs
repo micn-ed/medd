@@ -61,18 +61,50 @@ pub fn workspace_open(
             .unwrap_or_else(|| ws.root().to_string_lossy().into_owned()),
     };
 
-    let mut guard = workspace.lock().unwrap();
+    // The previous root is copied out of the guard by this one statement, not an `if let` on the
+    // lock — an `if let` scrutinee's temporary lives for the whole arm on edition 2021, which is
+    // exactly the trap that used to hold this same guard across `rescope_workspace` below. A plain
+    // `let` binding's temporary drops at the end of the statement, so the guard is gone before
+    // `rescope_workspace` — which never receives one — runs the asset-scope and FSEvents calls.
+    let previous_root = workspace
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|w| w.root().to_path_buf());
+
+    rescope_workspace(&app, &watcher, previous_root, info.root.clone());
+
+    *workspace.lock().unwrap() = Some(ws);
+    Ok(info)
+}
+
+/// Points the asset-protocol scope and the FSEvents watch at `new_root`, releasing `old_root`
+/// first if there was one. Takes both roots as owned `PathBuf`s, deliberately, not `&Path` — a
+/// borrow only proves the guard isn't held *today*; an owned value proves it structurally, because
+/// nothing can borrow a `MutexGuard` and hand out something that outlives it. `&Path` is the more
+/// idiomatic signature and the one a reviewer's eye slides past, which is exactly why it's the
+/// wrong choice here: it would leave this call site free to go back to passing a reference straight
+/// out of the guard with nothing failing, restoring the hazard invisibly. The one clone this costs
+/// per workspace switch is the point, not overhead to claw back.
+///
+/// Lock order here is workspace-then-watcher (the workspace guard above is already released by
+/// the time this takes the watcher lock), matching `document_read`'s — the only other site that
+/// takes both. Keeping that order consistent is what rules out an AB/BA deadlock between them; a
+/// third site taking both locks should follow the same order rather than inventing its own.
+fn rescope_workspace(
+    app: &AppHandle,
+    watcher: &Mutex<FsWatcher>,
+    old_root: Option<PathBuf>,
+    new_root: PathBuf,
+) {
     let scope = app.asset_protocol_scope();
     let mut fs_watcher = watcher.lock().unwrap();
-    if let Some(previous) = guard.as_ref() {
-        let _ = scope.forbid_directory(previous.root(), true);
-        fs_watcher.unwatch(previous.root());
+    if let Some(old_root) = &old_root {
+        let _ = scope.forbid_directory(old_root, true);
+        fs_watcher.unwatch(old_root);
     }
-    let _ = scope.allow_directory(ws.root(), true);
-    let _ = fs_watcher.watch_recursive(ws.root());
-
-    *guard = Some(ws);
-    Ok(info)
+    let _ = scope.allow_directory(&new_root, true);
+    let _ = fs_watcher.watch_recursive(&new_root);
 }
 
 /// One level of the tree, lazily (plan-v0.1.md increment 3) — never walks the whole workspace.
@@ -109,18 +141,40 @@ pub fn document_read(
 ) -> Result<ReadResult, MeddError> {
     let (content, hash) = store.read(&path)?;
 
-    if let Some(ws) = workspace.lock().unwrap().as_ref() {
-        if matches!(ws.classify(&path), Ok(PathClass::Loose)) {
-            if let Ok(canonical) = path.canonicalize() {
-                if let Some(dir) = canonical.parent() {
-                    let _ = app.asset_protocol_scope().allow_directory(dir, false);
-                    let _ = watcher.lock().unwrap().watch_non_recursive(dir);
-                }
+    // `is_loose` is a plain `let`, not an `if let` on the lock guard itself — an `if let`
+    // scrutinee's temporary lives for the whole arm on edition 2021 (src-tauri is 2021), which is
+    // exactly what used to hold this guard across the canonicalize/scope/watch calls below. A
+    // plain `let` binding's temporary drops at the end of its own statement, so nothing is held by
+    // the time `scope_and_watch_loose_document` — which never receives a lock — runs.
+    let is_loose = workspace
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|ws| matches!(ws.classify(&path), Ok(PathClass::Loose)));
+
+    if is_loose {
+        if let Ok(canonical) = path.canonicalize() {
+            if let Some(dir) = canonical.parent() {
+                scope_and_watch_loose_document(&app, &watcher, dir.to_path_buf());
             }
         }
     }
 
     Ok(ReadResult { content, hash })
+}
+
+/// Scopes the asset protocol to `dir` and starts a non-recursive watch on it, for a loose
+/// document's own directory. Takes `dir` as an owned `PathBuf`, not `&Path`, for the same reason
+/// as `rescope_workspace`: an owned value can't have been borrowed out of a `MutexGuard`, so this
+/// signature is what makes "never called while the workspace lock is held" a property the compiler
+/// enforces rather than one this comment merely asserts.
+///
+/// Lock order: this only ever takes the watcher lock, and only after `document_read` has already
+/// released the workspace lock — the same workspace-then-watcher order as `rescope_workspace`,
+/// just with the first half finished before this function is even called.
+fn scope_and_watch_loose_document(app: &AppHandle, watcher: &Mutex<FsWatcher>, dir: PathBuf) {
+    let _ = app.asset_protocol_scope().allow_directory(&dir, false);
+    let _ = watcher.lock().unwrap().watch_non_recursive(&dir);
 }
 
 /// Compare-and-swap write (architecture.md §3), called by the frontend's autosave debounce
