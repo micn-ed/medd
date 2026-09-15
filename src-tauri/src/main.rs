@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 mod commands;
 mod document;
 mod error;
+mod quickopen;
 mod quit;
 mod routing;
 mod state;
@@ -112,6 +113,7 @@ fn main() {
         .manage(document::DocumentStore::new())
         .manage(Mutex::new(None::<workspace::Workspace>))
         .manage(quit::QuitCoordinator::new())
+        .manage(quickopen::FileIndex::new())
         .manage(document::TempSweeper::new())
         .setup(|app| {
             let (fs_watcher, rx) =
@@ -159,6 +161,7 @@ fn main() {
             commands::document_read,
             commands::document_write,
             commands::quit_ready,
+            commands::quick_open_files,
             commands::open_external,
         ])
         .build(tauri::generate_context!())

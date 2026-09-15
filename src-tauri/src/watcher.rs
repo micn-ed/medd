@@ -18,13 +18,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::document::{ContentHash, DocumentStore, ExternalChange};
-use crate::workspace::Workspace;
+use crate::quickopen::FileIndex;
+use crate::workspace::{is_ignored_name, Workspace};
 
 const COALESCE_WINDOW: Duration = Duration::from_millis(100);
-
-/// Ignored anywhere *within* a watched workspace, not counting the workspace root's own name or
-/// anything above it — architecture.md §6.
-const IGNORED_ANCESTOR_NAMES: &[&str] = &["node_modules"];
 
 pub struct FsWatcher {
     debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
@@ -53,8 +50,10 @@ impl FsWatcher {
 }
 
 /// True if `path` is noise the watcher should never surface from *within* `workspace_root` —
-/// inside `.git/`, `node_modules/`, or a dotfile directory somewhere between the root and the
-/// changed entry. Deliberately root-relative rather than checked against the absolute path: a
+/// inside `.git/`, `node_modules/`, `target/`, or a dotfile directory somewhere between the root
+/// and the changed entry (`is_ignored_name`, `workspace.rs` — shared with `dir_list` and
+/// `quickopen`'s walk so the three don't quietly disagree about what "ignored" means).
+/// Deliberately root-relative rather than checked against the absolute path: a
 /// workspace that itself lives under, or even *is*, a dotfile directory (someone opens their
 /// `~/.dotfiles` to edit its README) must not have everything inside it silently ignored just
 /// because the root's own name happens to start with a dot. `path` not being under
@@ -66,10 +65,9 @@ pub fn is_ignored_in_workspace(workspace_root: &Path, path: &Path) -> bool {
     };
     let mut components: Vec<_> = relative.components().collect();
     components.pop(); // the changed entry's own name is never filtered for its own name
-    components.iter().any(|c| {
-        let name = c.as_os_str().to_string_lossy();
-        name.starts_with('.') || IGNORED_ANCESTOR_NAMES.contains(&name.as_ref())
-    })
+    components
+        .iter()
+        .any(|c| is_ignored_name(&c.as_os_str().to_string_lossy()))
 }
 
 /// Reduces a debounced batch to the distinct paths worth considering at all — a single
@@ -142,6 +140,10 @@ pub fn run_event_loop(rx: mpsc::Receiver<DebounceEventResult>, app: AppHandle) {
                 }
                 Some(ExternalChange::Removed) => {
                     let _ = app.emit("document:removed-on-disk", DocumentRemovedPayload { path });
+                    // A tracked file's removal changes quick-open's file list even though it's
+                    // not "untracked" — the branch below never sees it, so this arm invalidates
+                    // the cache on its own rather than relying on tree_changed to cover it.
+                    app.state::<FileIndex>().invalidate();
                 }
                 None => {
                     // Untracked: only counts toward the tree if it's actually within the
@@ -159,6 +161,10 @@ pub fn run_event_loop(rx: mpsc::Receiver<DebounceEventResult>, app: AppHandle) {
 
         if tree_changed {
             let _ = app.emit("tree:changed", ());
+            // A new or moved-in file changes quick-open's file list — invalidate rather than
+            // patch incrementally, since a whole-cache rebuild is cheap enough (plan-v0.1.md §9)
+            // that tracking the delta precisely isn't worth a second source of truth.
+            app.state::<FileIndex>().invalidate();
         }
     }
 }

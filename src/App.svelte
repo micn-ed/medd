@@ -6,6 +6,7 @@
   import { Editor } from './editor'
   import { Preview, dirname } from './render'
   import { sidebarLayout } from './sidebar'
+  import { QuickOpenDialog } from './quickopen'
   import {
     TabBar,
     allTabs,
@@ -127,6 +128,8 @@
     else unregisterMountedView(path)
   }
 </script>
+
+<QuickOpenDialog onOpenFile={openFile} />
 
 <div class="app">
   <header>
