@@ -88,6 +88,45 @@ reads as redundant and gets optimised away by the next person.
 
 ---
 
+## "I couldn't test this" is usually a finding about the code, not a limitation of the tester
+
+When something resists testing, the first question is not how to reach it but **why it is out of
+reach**. Twice on this project the answer was the same structural defect, and both times it was
+first reported as a coverage gap:
+
+- `watcher.rs`'s event loop was never executed by any test while holding every observable decision
+  — ignore-filtering, the tracked/untracked branch, the `tree_changed` fold.
+- The repeat-press behaviour lived in a branch inside the runtime-event handler, so nothing could
+  pin it.
+
+Both have the same tell: **the function holding the framework handle was the one with no test.**
+That is not a coincidence, it is the rule in `architecture.md` §2 being violated — *a shell
+contains no decisions; if a framework-aware function has a branch in it, it is in the wrong place.*
+Untestability was the symptom, not the problem.
+
+So the reportable statement is rarely "I can't reach this". It is "there is a decision in a place
+that cannot be reached, and here is why that placement is wrong" — which is actionable, where a
+coverage gap invites someone to go looking for a cleverer test harness.
+
+---
+
+## Point a detector at the thing, not at a proxy for the thing
+
+A detector keyed to *how* something is currently done goes **quiet, not loud**, when the how
+changes. The failure is silent by construction — there is no red test to notice, because the
+detector's whole job is to stay quiet until it isn't.
+
+Three near-misses here, all on the same verification watch: it matched a runtime event name, and
+the implementation routed around that event entirely; it matched a docs commit that wasn't the fix;
+it matched a clean-tree condition that an untracked file could hold false indefinitely. The working
+version watches the blob hashes of the two files whose behaviour is under test — because *those
+files changed* is the thing actually being waited for.
+
+**Re-ask whenever the implementation approach changes**, which is precisely when nobody thinks to:
+the change that makes a detector blind is the same change that has everyone's attention elsewhere.
+
+---
+
 ## Measured, not estimated — and validate the instrument
 
 **Why.** Reading mode's column width was specified in `ch`, which is the advance width of the "0"
