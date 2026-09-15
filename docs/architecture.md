@@ -144,6 +144,23 @@ the work into a plain function that receives what it needs already copied out ma
 **impossible to violate at that site** — a function cannot hold a guard it was never given. Prefer
 the structural form, for the same reason a derived value beats a stored one.
 
+**And extraction is only structural if the *signature* carries the guarantee.** Here that means an
+owned `PathBuf`, not `&Path`: `ws.root()` borrows out of the `Workspace`, which borrows out of the
+`MutexGuard`, so a borrowed parameter forces the guard to stay alive for the whole call.
+Demonstrated by construction — with `&Path` the lock is unavailable to another thread during the
+call; with `PathBuf` it is available.
+
+Worth stating explicitly because **`&Path` is the idiomatic signature**. Preferring a borrow over
+an allocation is ordinary good advice, so it is what a careful implementer writes and a careful
+reviewer approves — and it leaves the invariant exactly as violated while *looking* addressed,
+which is worse than leaving it alone, because nobody re-checks something that appears handled. The
+allocation is the mechanism, not a cost to optimise away.
+
+The general form: extraction with a permissive signature *moves* a violation rather than removing
+it, and consumes the attention that would otherwise have found it. A call site that copies today
+can be edited back tomorrow with nothing failing; a signature that only accepts owned data cannot
+be, without the change appearing in the diff as a type change.
+
 An earlier version of this rule said `commands.rs` was the only module that knew Tauri's *command
 macros* existed. That described an implementation detail and called it a boundary, and it let a
 second module become Tauri-aware without tripping it — `watcher.rs` imports `AppHandle`/`Emitter`
