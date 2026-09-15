@@ -103,6 +103,25 @@ One Rust module per concern, each with a narrow public surface.
 `watcher.rs`'s emit loop. A shell contains no decisions. If a Tauri-aware function has a branch in
 it, it is in the wrong place.**
 
+**The workspace predicates.** Every question about what medd considers part of a workspace is
+answered exactly once, in `workspace.rs`: `is_markdown`, `is_ignored_name`, `resolves_to_directory`.
+Together these three *are* medd's definition of a workspace's contents — not helpers that happen to
+share a file. **A caller that computes one of these answers again is a bug, even when it computes
+the same thing.** That last clause is the operative one: every instance of this on the project has
+been a new consumer re-deriving an answer that already existed, and at least once the duplicate was
+character-for-character identical to the shared function, which is exactly why "they agree today"
+is not a defence.
+
+They are *predicates*, deliberately, not a classifier. A shared `classify_entry -> EntryKind` was
+considered and rejected: `dir_list` asks a three-way presentational question (W-8 requires it to
+categorise non-Markdown files as `Other`), while the walk asks two-way questions and has no use for
+a sidebar category it must then ignore. That is coupling, not sharing. The shared thing is the atom
+they genuinely have in common.
+
+The naming carries the ruling. `resolves_to_directory`, not `is_directory` — the failure mode is
+someone simplifying it to `entry.file_type().is_dir()`, and a name containing *resolves* makes that
+substitution visibly wrong at the call site.
+
 **And no lock is held across a filesystem or OS call.** Every command was `ExecutionContext::
 Blocking` until increment 9, so commands could not overlap and a lock held across a syscall blocked
 nobody — there was nobody to block. The first `async` command makes that assumption false, and it
@@ -185,6 +204,20 @@ is on disk now what I think is there?"*. The hash is cheap: these are documents,
 and it is computed on a read or write we were already doing.
 
 Rust keeps a map `path → last_known_hash` for every open document, guarded by a mutex.
+
+**The guard stops path *construction* escaping the workspace; it does not stop the user's own
+symlinks being followed.** `..` is construction — a caller assembling a path out of the workspace —
+and is rejected outright. A symlink is *content*: the user placed it there deliberately, and D-4's
+root folder is what they meant by doing so. So the order is: reject any path containing a `..`
+component, require it lexically under the root, and only then resolve whatever links are present.
+That closes `root().join("../outside.md")` **before** any link resolves, and it is auditable by
+reading rather than by reasoning about resolution order.
+
+Following symlinks gives up the type-level cycle immunity that not following them provides, so the
+replacement is unconditional rather than careful: a visited set of canonical paths, which is also
+correct for diamonds. **Test the diamond, not the cycle** — two links to one real directory
+terminates either way and fails as a deterministic count, whereas a cycle test fails by *hanging*,
+which is the worst failure mode a suite can have.
 
 **Paths are canonicalised before anything touches disk**, and the tracked key is always the real
 file rather than whatever the caller handed in. This is not merely tidiness — it is what makes
