@@ -20,7 +20,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
-use crate::workspace::{is_ignored_name, is_markdown};
+use crate::workspace::{is_ignored_name, is_markdown, resolves_to_directory};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,15 +79,36 @@ impl Default for FileIndex {
 
 /// Recursively collects every `.md` file under `root`, iteratively (an explicit stack rather
 /// than recursion, so a pathologically deep tree can't blow the stack). Ignored names — dotfiles,
-/// `node_modules` — are checked against each entry's own name as it's found, exactly like
+/// `node_modules`, `target` — are checked against each entry's own name as it's found, exactly like
 /// `dir_list`'s per-level dotfile hiding, which is what makes a workspace whose own root is a
 /// dotfile directory (`~/.dotfiles`) work correctly for free: the root's own name is never itself
-/// checked, only the names of things found inside it. Directory symlinks are never followed
-/// (`DirEntry::file_type` reports the link's own type, not its target's), which sidesteps a
-/// symlink cycle turning this into an infinite walk; a symlinked `.md` *file* is still listed.
+/// checked, only the names of things found inside it.
+///
+/// **Symlinked directories are followed**, via the shared `resolves_to_directory` predicate — the
+/// same answer the sidebar uses, which is what stops the two disagreeing about what the workspace
+/// contains. A link resolving *outside* the root is not descended into, matching the boundary
+/// `Workspace::dir_list` enforces; reaching outside at all is a v0.2 question.
+///
+/// Following costs the type-level cycle immunity that never following gave for free, so the
+/// replacement is unconditional rather than careful: `visited` holds the **canonical** path of
+/// every directory descended into, so a cycle revisits a path it has already seen and stops, and a
+/// diamond — two links to one real directory — contributes its documents exactly once. Which of
+/// the two routes a diamond's documents are reported under is unspecified and depends on
+/// `read_dir` order; the count is not.
 fn walk_markdown_files(root: &Path) -> Vec<QuickOpenEntry> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
+
+    // The boundary check below compares canonical paths, so the root has to be canonical too —
+    // otherwise every descent is refused on any path reached through a symlink, which on macOS
+    // includes anything under `/tmp` (`/var` is itself a link to `/private/var`). The production
+    // caller already passes a canonical root; canonicalising here means the function does not
+    // silently depend on that.
+    let Ok(canonical_root) = root.canonicalize() else {
+        return out;
+    };
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(canonical_root.clone());
 
     while let Some(dir) = stack.pop() {
         let Ok(read_dir) = std::fs::read_dir(&dir) else {
@@ -101,12 +122,17 @@ fn walk_markdown_files(root: &Path) -> Vec<QuickOpenEntry> {
             }
 
             let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
 
-            if file_type.is_dir() {
-                stack.push(path);
+            if resolves_to_directory(&path) {
+                // Descend only if this stays inside the workspace and we have not been here
+                // before. `canonicalize` answers both questions at once, and a path that cannot
+                // be canonicalised is one we cannot reason about, so it is skipped.
+                let Ok(canonical) = path.canonicalize() else {
+                    continue;
+                };
+                if canonical.starts_with(&canonical_root) && visited.insert(canonical) {
+                    stack.push(path);
+                }
             } else if is_markdown(&name_str) {
                 let relative_path = path
                     .strip_prefix(root)
@@ -230,11 +256,19 @@ mod tests {
         // the walk unbounded, and the failure mode is silent -- no crash, no error, just a worker
         // thread spinning forever while quick-open's dialog never populates, indistinguishable
         // from an ordinary slow walk on the one operation whose entire point is not blocking.
-        // `walk_markdown_files` never follows directory symlinks at all (see its own doc comment:
-        // `DirEntry::file_type` reports the link's own type, not its target's) -- cycle safety by
-        // never traversing a link's target, not by a depth cap, which QA is right to rule out: a
-        // cap converts an infinite walk into a silently *wrong* one, indistinguishable from a
-        // correct result that happens to be short.
+        //
+        // This test predates the symlink ruling and still passes, but **for a different reason**,
+        // which is worth saying because a stale "why" is how a test comes to guard nothing. It
+        // used to hold because the walk never followed a directory symlink at all -- cycle safety
+        // as a property of the type it asked. Now the walk does follow them, and safety comes from
+        // `visited` holding canonical paths: the loop resolves to a directory already descended
+        // into, so it stops. A depth cap remains ruled out for QA's original reason -- a cap turns
+        // an infinite walk into a silently *wrong* one, indistinguishable from a correct result
+        // that happens to be short.
+        //
+        // Note what this test cannot do: if `visited` were removed it would **hang**, not fail.
+        // The diamond test below is the deterministic guard on the same mechanism, and is the one
+        // to reach for first.
         let root = tempdir().unwrap();
         fs::create_dir_all(root.path().join("notes")).unwrap();
         fs::write(root.path().join("notes/real.md"), "x").unwrap();
@@ -247,13 +281,17 @@ mod tests {
 
     #[test]
     fn a_directory_symlink_pointing_outside_the_root_is_never_descended_into() {
-        // The sibling case QA asked to check alongside the cycle: `workspace::classify` already
-        // resolves before comparing against the root, so an escaping symlink can't disguise
-        // itself as root-relative there. This is the same property for the walk, and it needs no
-        // extra code to hold -- `walk_markdown_files` never follows *any* directory symlink,
-        // inward-pointing or outward, so an escape hatch here would be a regression, not a
-        // missing feature. Demonstrated rather than assumed: a real directory (with a real .md
-        // file in it) sits outside the workspace, linked from inside it.
+        // The sibling case QA asked to check alongside the cycle. Still true, and again for a
+        // different reason than when it was written: the walk now follows directory symlinks, so
+        // this no longer holds for free. It holds because the walk stops at the same boundary
+        // `Workspace::dir_list` enforces -- a link resolving outside the root is not descended
+        // into -- which is what makes the sidebar and quick-open agree that those documents are
+        // not in the workspace.
+        //
+        // Reaching outside the root at all is a v0.2 question (architecture.md §2): `..` is path
+        // construction and stays refused, a symlink is content and should eventually be followed.
+        // When that lands, this test's expectation flips -- and it should, because the ruling
+        // changed, not because the code drifted.
         let outside = tempdir().unwrap();
         fs::write(outside.path().join("secret.md"), "x").unwrap();
 
@@ -264,6 +302,59 @@ mod tests {
         let entries = walk_markdown_files(root.path());
 
         assert_eq!(names_of(&entries), vec!["visible.md"]);
+    }
+
+    #[test]
+    fn a_symlinked_directory_inside_the_root_is_walked() {
+        // The behaviour the symlink ruling changed. Before, this directory rendered and expanded
+        // in the sidebar while none of its documents appeared in Cmd+P -- the tree and the walk
+        // answering "is this part of the workspace?" differently. They now share
+        // `resolves_to_directory`, so there is one answer.
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("real")).unwrap();
+        fs::write(root.path().join("real/note.md"), "x").unwrap();
+        std::os::unix::fs::symlink(root.path().join("real"), root.path().join("aliased")).unwrap();
+
+        let entries = walk_markdown_files(root.path());
+
+        // Reached once, not twice: `visited` keys on the canonical directory, so whichever route
+        // the walk takes first wins and the other is skipped. Which one is unspecified (it depends
+        // on `read_dir` order), so this asserts the count rather than the route.
+        assert_eq!(
+            entries.len(),
+            1,
+            "the document must be offered exactly once"
+        );
+        assert!(
+            names_of(&entries) == vec!["real/note.md"]
+                || names_of(&entries) == vec!["aliased/note.md"],
+            "unexpected route: {:?}",
+            names_of(&entries)
+        );
+    }
+
+    #[test]
+    fn a_diamond_contributes_its_documents_exactly_once() {
+        // The deterministic guard on the same mechanism the cycle test exercises. Two links, in
+        // different directories, to one real directory. This terminates with or without `visited`
+        // -- so unlike the cycle test it *fails* rather than hangs, and it fails as a count, which
+        // is why it is the one to reach for first.
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("shared")).unwrap();
+        fs::write(root.path().join("shared/note.md"), "x").unwrap();
+        fs::create_dir(root.path().join("a")).unwrap();
+        fs::create_dir(root.path().join("b")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("shared"), root.path().join("a/link")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("shared"), root.path().join("b/link")).unwrap();
+
+        let entries = walk_markdown_files(root.path());
+
+        assert_eq!(
+            entries.len(),
+            1,
+            "one document reachable by three routes must be offered once, got {:?}",
+            names_of(&entries)
+        );
     }
 
     #[test]

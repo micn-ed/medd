@@ -93,7 +93,32 @@ impl Workspace {
         if !canonical.starts_with(&self.root) {
             return Err(MeddError::OutsideWorkspace { path: canonical });
         }
-        dir_list(&canonical)
+
+        let mut entries = dir_list(&canonical)?;
+
+        // A symlinked directory resolving *outside* the root is shown but inert, exactly as W-8
+        // already treats a non-Markdown file. Before this, it was listed as a `Directory` and then
+        // refused by the guard above the moment the user clicked it — a tree offering something it
+        // will not open. It is also what makes the sidebar and quick-open's walk agree: the walk
+        // stops at the same boundary, so neither now claims those documents are in the workspace.
+        //
+        // Reaching outside the root at all is a v0.2 question (architecture.md §2, the symlink
+        // ruling): `..` is path construction and stays refused, while a symlink is content and
+        // should eventually be followed. Until then this is the honest state rather than the
+        // merely incomplete one.
+        for entry in &mut entries {
+            if entry.kind == EntryKind::Directory
+                && !entry
+                    .path
+                    .canonicalize()
+                    .map(|c| c.starts_with(&self.root))
+                    .unwrap_or(false)
+            {
+                entry.kind = EntryKind::Other;
+            }
+        }
+
+        Ok(entries)
     }
 }
 
@@ -111,6 +136,27 @@ pub struct TreeEntry {
     pub name: String,
     pub path: PathBuf,
     pub kind: EntryKind,
+}
+
+/// Whether `path` resolves to a directory — **following symlinks**, which is the whole point of
+/// the name.
+///
+/// This is one of the workspace predicates (§2): the single answer to *"does medd treat this entry
+/// as a container of workspace content?"*, shared by the sidebar's classification and quick-open's
+/// walk. They previously answered it separately — `fs::metadata` here, `DirEntry::file_type` there
+/// — and disagreed, which is how a symlinked directory came to render and expand in the tree while
+/// never appearing in Cmd+P.
+///
+/// **Do not "simplify" this to `entry.file_type().is_dir()`.** That is the non-following form, and
+/// it is precisely the answer this project ruled against: a symlink the user placed inside their
+/// own root is an assertion that those documents are part of this workspace, and medd already
+/// honours that assertion for symlinked *files*. The word `resolves` is in the name so that
+/// substitution reads as wrong at the call site rather than as a tidy-up.
+///
+/// A dangling symlink resolves to nothing and is therefore not a directory, which is also what the
+/// sidebar has always shown it as.
+pub fn resolves_to_directory(path: &Path) -> bool {
+    fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false)
 }
 
 /// Whether `file_name` names a Markdown document, by the only rule medd has: the extension.
@@ -152,12 +198,17 @@ pub fn dir_list(dir: &Path) -> Result<Vec<TreeEntry>, MeddError> {
         }
 
         let path = canonical_dir.join(&name);
-        let kind = match fs::metadata(&path) {
-            Ok(meta) if meta.is_dir() => EntryKind::Directory,
-            Ok(_) if is_markdown(&name_str) => EntryKind::Markdown,
-            // Includes a dangling symlink: metadata() follows the link and fails, so it's shown
-            // but inert rather than dropped from the listing or treated as a crash.
-            _ => EntryKind::Other,
+        let kind = if resolves_to_directory(&path) {
+            EntryKind::Directory
+        } else if is_markdown(&name_str) && path.exists() {
+            EntryKind::Markdown
+        } else {
+            // `path.exists()` above follows the link, so a *dangling* symlink named `x.md` lands
+            // here: shown, but inert rather than offered as a document that cannot be opened.
+            // That check is this function's own, not a workspace predicate — "does this entry
+            // resolve to anything at all" is a question only the sidebar asks, because only the
+            // sidebar has a category for the answer.
+            EntryKind::Other
         };
 
         entries.push(TreeEntry {
@@ -437,6 +488,40 @@ mod tests {
         let ws = Workspace::open(root.path()).unwrap();
         let result = ws.dir_list(elsewhere.path());
         assert!(matches!(result, Err(MeddError::OutsideWorkspace { .. })));
+    }
+
+    #[test]
+    fn a_symlinked_directory_pointing_outside_the_root_is_listed_but_inert() {
+        // Before the symlink ruling this was listed as a `Directory` and then refused the moment
+        // the user clicked it -- a tree offering something it will not open. `Other` is what W-8
+        // already means by visible-but-inert, and it is what makes the sidebar and quick-open's
+        // walk agree: the walk stops at the same boundary.
+        let root = tempdir().unwrap();
+        let elsewhere = tempdir().unwrap();
+        fs::write(elsewhere.path().join("outside.md"), "x").unwrap();
+
+        let ws = Workspace::open(root.path()).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), ws.root().join("escape")).unwrap();
+
+        let entries = ws.dir_list(ws.root()).unwrap();
+        let escape = entries.iter().find(|e| e.name == "escape").unwrap();
+        assert_eq!(escape.kind, EntryKind::Other);
+    }
+
+    #[test]
+    fn a_symlinked_directory_inside_the_root_stays_a_directory() {
+        // The other side of the same rule: a link the user placed inside their workspace pointing
+        // at content also inside it is an ordinary directory, and expanding it works.
+        let root = tempdir().unwrap();
+        let ws = Workspace::open(root.path()).unwrap();
+        fs::create_dir(ws.root().join("real")).unwrap();
+        fs::write(ws.root().join("real/note.md"), "x").unwrap();
+        std::os::unix::fs::symlink(ws.root().join("real"), ws.root().join("aliased")).unwrap();
+
+        let entries = ws.dir_list(ws.root()).unwrap();
+        let aliased = entries.iter().find(|e| e.name == "aliased").unwrap();
+        assert_eq!(aliased.kind, EntryKind::Directory);
+        assert_eq!(ws.dir_list(&ws.root().join("aliased")).unwrap().len(), 1);
     }
 
     #[test]
