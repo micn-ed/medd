@@ -42,12 +42,15 @@ Read in this order:
 These are deliberate, and worth stating plainly rather than leaving to be discovered.
 
 **The window may not come forward when you open a file from elsewhere.** medd will always open
-the file as a tab. Raising and focusing its window is attempted but not guaranteed, because the
-macOS API underneath it (`NSRunningApplication.activateWithOptions`) has been unreliable since Big
-Sur and is deprecated as of Sonoma — there are open upstream Tauri issues tracing to exactly this,
-one of them closed *not planned*. No choice of IPC mechanism fixes it. Rather than build behaviour
-that depends on an API that silently declines to work, medd degrades gracefully: your file is
-already there when you click the window. See [ADR-003](docs/adr/003-launch-routing.md).
+the file as a tab; raising and focusing its window is attempted, and in one case cannot be
+guaranteed. If the window is merely behind another app, the macOS API underneath
+(`NSRunningApplication.activateWithOptions`) has been unreliable since Big Sur and is deprecated as
+of Sonoma — there are open upstream Tauri issues tracing to exactly this, one closed *not planned*,
+and no choice of IPC mechanism fixes it. If the window is minimised (Cmd+M) or hidden (Cmd+H) —
+both of which are standard items in medd's own menu — medd restores it first, which is what makes
+activation work in those states rather than silently doing nothing. Where it still fails, medd
+degrades gracefully: your file is already there when you click the window.
+See [ADR-003](docs/adr/003-launch-routing.md).
 
 **Very large documents lose the live preview.** Above roughly 1 MB the preview switches to manual
 refresh, and above roughly 10 MB the document opens read-only with no preview. Editing stays live

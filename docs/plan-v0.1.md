@@ -268,8 +268,14 @@ Deliberately late: the fiddliest platform work, and nothing above depends on it.
   goes through this buffer every time — it is the normal path, not the exception.
 - Startup race: **not mitigated** — see ADR-003. The plugin unlinks then binds, so two simultaneous
   launches produce two windows and there is no hook to retry from. Accepted and documented.
-- Window activation: attempt `show()` + `set_focus()`, and **depend on neither**. See the known
-  limitation below.
+- Window activation: `activate()` is **`unminimize()` → `show()` → `set_focus()`**, in that order.
+  `unminimize()` is not optional — `tao`'s `set_focus()` guards itself behind `isMiniaturized()`
+  and `isVisible()`, so without it activation on a minimised window is skipped entirely *and
+  returns success*. Query the window's own `is_minimized()`/`is_visible()`; do **not** branch on
+  `Reopen`'s `has_visible_windows`, which the CLI path never receives.
+- Activation is verified in **three named states with predicted outcomes** — occluded, minimised,
+  hidden — using `is_focused()` to assert rather than eyeball. Only the occluded case is expected
+  to remain unreliable. See the known limitation below.
 - `scripts/medd` shim: if the socket accepts a connection, exec the bundle binary so the plugin's
   own client forwards `argv`; otherwise `open -a` so Launch Services starts it detached from the
   terminal. Resolve relative paths to absolute before handing them on — the running instance's
@@ -318,6 +324,25 @@ safe, and are therefore queued rather than blocking — but none of them ship br
 | 5 | Any read failure is reported as deletion | `EACCES`/`EIO`/`EMFILE` — the last most likely during the filesystem storms that generate watcher traffic — all latch a tab into finding 4's state. Only `NotFound` should mean removed. |
 | 6 | A non-UTF-8 external change is lossily converted, and the CAS lets medd write it back | `read()` refuses non-UTF-8 but `check_external_change` uses `from_utf8_lossy`, and the hash is of the raw bytes — so a later autosave passes CAS and writes replacement characters over the file's real content. |
 | — | `document_close` is specified in architecture.md §4 and does not exist | `last_known` grows for the session, loose-document watches are never released, and asset-protocol grants are never revoked. |
+
+**Cmd+W quits medd, and quitting loses every pending edit.** Sequenced after the current fix
+batch, not into it, but ranked with the blockers rather than below them.
+
+Tauri's `Menu::default` ships Cmd+W twice, and under I-2 it quits. In every other tabbed editor on
+the platform Cmd+W means *close tab*, so a user with six documents open reaches to close one and
+quits the app. Meanwhile `main.rs` registers no `ExitRequested` handling and the frontend has no
+unload path, so any edit inside the ~1s debounce window — **in every open tab** — is lost on quit.
+That is QA's finding 1 generalised from one tab to the whole app, behind a keystroke that means
+"close one tab" to the user's fingers. P-2 promises closing a tab is safe; nothing promises
+quitting is, and under D-5 no user has reason to draw that line.
+
+Both halves ship together: fixing the keystroke alone hides the data loss behind a rarer gesture,
+and fixing the flush alone leaves an editor that quits on Cmd+W. The keystroke needs a custom menu
+replacing `Menu::default` (Quit stays Cmd+Q); the flush needs `ExitRequested` + `prevent_exit()`,
+asking the frontend to flush and exiting when it reports done. Its invariant is the close-flush's
+with clause 2 vacuous: **the exit must issue everything the debounce still owes, and the outcome of
+those writes applies to nothing.** The close-flush is therefore to be built as a primitive with more
+than one caller, since quit is the second.
 
 From QA's retroactive pass over increments 1-6 and 8:
 

@@ -1,4 +1,4 @@
-# ADR-003 — Two listeners, one router, best-effort activation
+# ADR-003 — Three listeners, one router, one activator
 
 **Status:** Accepted, 2026-09-14
 **Resolves:** [open-questions.md](../open-questions.md) Q-10 (blocks v0.1)
@@ -7,13 +7,30 @@
 
 ## Decision
 
-medd uses **two** launch listeners feeding **one** router:
+medd uses **three** launch listeners feeding **one** router and **one** activator:
 
 - **`tauri-plugin-single-instance`** (Unix-domain-socket backed, current on macOS) for
   `argv`-shaped launches: the CLI, and by extension Neovim's `:Medd`, which D-6 routes through the
   same entry point.
 - **Tauri's `RunEvent::Opened`** for Apple-Event-shaped launches: Finder double-click and
   "Open With".
+- **Tauri's `RunEvent::Reopen`** (from `applicationShouldHandleReopen:`) for launches that carry no
+  document at all: a Dock click, or `open -a` on an already-running app.
+
+**Routing and activation are separate concerns**, and the third listener is what makes that
+visible. `Reopen` carries no paths, so it cannot call the router — which is the tell that activation
+was never part of routing in the first place. It was folded in because, with only two listeners,
+every launch happened to carry a document.
+
+| Listener | Shape | Carries a document? | Calls |
+|---|---|---|---|
+| single-instance callback | argv + cwd | usually | `route_open` if any paths, then `activate` |
+| `RunEvent::Opened` | Apple Event | always | `route_open`, then `activate` |
+| `RunEvent::Reopen` | Apple Event | never | `activate` only |
+
+Separating them also disposes of an awkward case rather than adding one: bare `medd` while an
+instance is running yields zero paths after `argv[0]` is skipped, and with activation extracted
+there is no empty-path call into the router to define.
 
 Both terminate in a single Rust `route_open(paths)` function. Window activation is attempted and
 **not depended upon**.
@@ -60,19 +77,64 @@ good at.
 
 ## Trade-off accepted, and the honest bit
 
-**Window activation is best-effort, not guaranteed.** `set_focus()` on macOS is unreliable:
-`NSRunningApplication.activateWithOptions` — the call TAO ultimately makes — has been documented as
-flaky since Big Sur and is deprecated as of Sonoma, sometimes silently declining to activate an app
-not already "eligible". Two upstream issues trace to this (`tauri#12936`;
-`plugins-workspace#1613`, closed *not planned*, with "minimize instead of hide" offered as a
-workaround that trades one undesired behaviour for another).
+An earlier version of this section said window activation was "best-effort, not guaranteed" and
+attributed that to a deprecated macOS API — a platform limitation no IPC choice could fix. **That
+was right for one window state out of three, and describing all three that way would have shipped
+a fixable bug as an accepted cost.** Honest-sounding text that stops people investigating is its
+own hazard.
 
-This is a macOS platform limitation that no IPC choice fixes. medd's posture is to degrade
-gracefully: **the file opens as a tab whether or not the window comes forward.** No behaviour in
-the design may assume the window is frontmost after a routed open — worst case, the user clicks the
-window themselves and their file is already there. This should be spot-tested early against real
-window states, since the reported failure is specific to `hide()`-style states and medd may never
-enter one.
+Traced through `tao` 0.35.3 (`platform_impl/macos/window.rs`), the deprecated call is reachable
+*only* via `set_focus()`, and `set_focus()` guards itself:
+
+```rust
+pub fn set_focus(&self) {
+    let is_minimized = self.ns_window.isMiniaturized();
+    let is_visible = self.ns_window.isVisible();
+    if !is_minimized && is_visible {
+      util::set_focus(&self.ns_window);   // makeKeyAndOrderFront: + activateIgnoringOtherApps:
+    }
+}   // no else — Window::set_focus() returns Ok(()) either way
+```
+
+So in the two states where activation is most needed it is not unreliable; it is **skipped
+deterministically, and reports success.**
+
+| Window state | Why activation fails | Fixable here? |
+|---|---|---|
+| Visible but occluded | the deprecated API genuinely is unreliable | **No.** This is the real platform limitation. |
+| **Minimized** (Cmd+M) | `tao`'s `isMiniaturized()` guard skips the call entirely | **Yes** — `unminimize()` first |
+| **Hidden** (Cmd+H) | the same guard, via `isVisible()` | **Probably** — `show()` first; to be measured, not assumed |
+
+**`activate()` is therefore `unminimize()` → `show()` → `set_focus()`**, in that order, each step
+present for a stated reason. `show()` is only `makeKeyAndOrderFront:`; whether that clears
+`isMiniaturized` on a miniaturised window is version-dependent folklore, while `deminiaturize:` is
+the documented way to restore one. The general rule: **prefer the call whose behaviour is
+documented over the call that happens to work.**
+
+**Do not branch on `Reopen`'s `has_visible_windows` flag.** It is the tempting input and the wrong
+one — the CLI path carries no such flag, so branching on it would fix the Dock click while leaving
+`medd notes.md` broken when minimised, which is the worst kind of partial fix: it removes the bug's
+most reproducible trigger without removing the bug. Query `is_minimized()`/`is_visible()` on the
+window instead; that works identically for every caller. Keep the flag for diagnostics.
+
+**The claim that "medd may never enter a `hide()` state" is withdrawn.** It reasoned about what
+medd does rather than what medd ships. `main.rs` registers no custom menu, so Tauri's
+`Menu::default` applies — which puts **Cmd+H** (`hide`), `hide_others` and **Cmd+M** (`minimize`)
+under medd's own application menu. The hidden state is one keystroke away via the most common
+"get out of my way" gesture on the platform.
+
+The residual unknown is specific and should be tested rather than predicted: Cmd+H is
+`[NSApp hide:]`, which hides the *application*, not the window, and a window-level
+`makeKeyAndOrderFront:` may not clear an application-level flag. Its documented counterpart is
+`[NSApp unhide:]`, which Tauri does not expose. If `show()` proves insufficient, the choice is an
+`objc2` call or accepting the hidden case as genuinely unfixable — a decision to make against a
+measurement.
+
+**For the one state that stays unreliable, the posture stands:** the file opens as a tab whether or
+not the window comes forward, and no behaviour may assume the window is frontmost after a routed
+open. `is_focused()` exists, so increment 12's manual pass should *assert* activation in each of
+the three named states with a predicted outcome, rather than eyeballing it — a test with a
+prediction catches a wrong prediction; one without catches only a crash.
 
 ## Consequences
 
