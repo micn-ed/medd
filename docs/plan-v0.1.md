@@ -318,6 +318,31 @@ enter one.
 
 ---
 
+## Carried fixes — from the increment 7 design review
+
+Found by the principal architect reviewing increment 7 against the design
+([review-increment-7.md](review-increment-7.md)), verified by running code. Two blockers were
+fixed inside increment 7. These five are real, are not silent data loss on a path the design calls
+safe, and are therefore queued rather than blocking — but none of them ship broken.
+
+| # | Finding | Why it matters |
+|---|---|---|
+| 3 | A write settling after a conflict resolution clobbers the resolved state | Produces a conflict banner that no user edit caused — D-11's own named fatal failure. Needs a per-tab generation counter captured before the await. |
+| 4 | `detached` is a terminal, invisible state | A deleted file silently stops autosaving forever, with nothing on screen and no recovery — a recreated file comes back untracked. `git checkout` across branches does exactly this. |
+| 5 | Any read failure is reported as deletion | `EACCES`/`EIO`/`EMFILE` — the last most likely during the filesystem storms that generate watcher traffic — all latch a tab into finding 4's state. Only `NotFound` should mean removed. |
+| 6 | A non-UTF-8 external change is lossily converted, and the CAS lets medd write it back | `read()` refuses non-UTF-8 but `check_external_change` uses `from_utf8_lossy`, and the hash is of the raw bytes — so a later autosave passes CAS and writes replacement characters over the file's real content. |
+| — | `document_close` is specified in architecture.md §4 and does not exist | `last_known` grows for the session, loose-document watches are never released, and asset-protocol grants are never revoked. |
+
+Record now, fix before v0.3: **own writes emit `tree:changed`**. An atomic write reports three
+paths to FSEvents — the directory, the document, and `.medd-*.tmp` — and own-write suppression is
+specified only in terms of the document's content hash, so two of the three set `tree_changed`.
+Harmless until W-6 lands in v0.3, at which point every autosave re-lists every expanded directory.
+Note that the existing `own_write_produces_no_notification` test **cannot** catch this: it asserts
+per-path classification, never the emitted-event decision, so it passes while the behaviour it is
+named for is violated.
+
+---
+
 ## 12 — Harden
 
 **Goal.** Replace the estimates with measurements, and do the manual pass.
