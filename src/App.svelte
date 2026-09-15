@@ -5,6 +5,7 @@
   import { Tree } from './tree'
   import { Editor } from './editor'
   import { Preview, dirname } from './render'
+  import { sidebarLayout } from './sidebar'
   import {
     TabBar,
     allTabs,
@@ -63,18 +64,13 @@
 
   let tab = $derived(activeTab())
   let documentDir = $derived(tab ? dirname(tab.path) : '')
-  // Q2 (per-document: "should this be distraction-free?") is allowed to hide the sidebar, but only
-  // by *participating in the derivation* — never by overwriting Q1 (the toggle's own answer,
-  // above). Leaving reading mode, or switching to a tab that isn't in it, restores the sidebar
-  // with nothing having to remember to undo anything.
-  let sidebarVisible = $derived(
-    workspaceRoot !== null && !sidebarHiddenByUser && tab?.viewMode !== 'reading',
+  // `sidebar.ts`'s own header explains why `visible` is defined in terms of `showToggle` rather
+  // than as a second, separately-repeated condition: that's what keeps a control that's present
+  // but does nothing (reading mode) from becoming possible again the next time a condition is
+  // added to one but not the other.
+  let { visible: sidebarVisible, showToggle: showSidebarToggle } = $derived(
+    sidebarLayout(workspaceRoot, sidebarHiddenByUser, tab?.viewMode),
   )
-  // The toggle itself is absent, not disabled, while the active tab is in reading mode: under a
-  // derived visibility it would flip `sidebarHiddenByUser` and nothing on screen would change,
-  // and a control that's present, enabled and does nothing reads as broken. Reading mode already
-  // has this precedent — it hides the editor pane, and there is no inert "show editor" button.
-  let showSidebarToggle = $derived(workspaceRoot !== null && tab?.viewMode !== 'reading')
 
   function formatError(e: unknown): string {
     if (e && typeof e === 'object' && 'kind' in e) {
@@ -146,7 +142,7 @@
   </header>
 
   <div class="body">
-    {#if sidebarVisible && workspaceRoot}
+    {#if workspaceRoot && sidebarVisible}
       <nav class="sidebar">
         <Tree path={workspaceRoot} onOpenFile={openFile} />
       </nav>
