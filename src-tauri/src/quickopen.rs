@@ -205,6 +205,27 @@ mod tests {
     }
 
     #[test]
+    fn a_directory_symlink_pointing_outside_the_root_is_never_descended_into() {
+        // The sibling case QA asked to check alongside the cycle: `workspace::classify` already
+        // resolves before comparing against the root, so an escaping symlink can't disguise
+        // itself as root-relative there. This is the same property for the walk, and it needs no
+        // extra code to hold -- `walk_markdown_files` never follows *any* directory symlink,
+        // inward-pointing or outward, so an escape hatch here would be a regression, not a
+        // missing feature. Demonstrated rather than assumed: a real directory (with a real .md
+        // file in it) sits outside the workspace, linked from inside it.
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("secret.md"), "x").unwrap();
+
+        let root = tempdir().unwrap();
+        fs::write(root.path().join("visible.md"), "x").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("escape")).unwrap();
+
+        let entries = walk_markdown_files(root.path());
+
+        assert_eq!(names_of(&entries), vec!["visible.md"]);
+    }
+
+    #[test]
     fn ignores_dotfile_directories_anywhere_in_the_tree() {
         let root = tempdir().unwrap();
         fs::create_dir_all(root.path().join(".obsidian")).unwrap();
@@ -260,5 +281,65 @@ mod tests {
         let index = FileIndex::new();
         assert_eq!(names_of(&index.files(root_a.path())), vec!["a.md"]);
         assert_eq!(names_of(&index.files(root_b.path())), vec!["b.md"]);
+    }
+
+    #[test]
+    fn walking_the_tree_and_writing_a_document_can_run_concurrently() {
+        // QA's concurrency criterion: "assumed and holding looks identical to tested and holding
+        // right up until it doesn't." `FileIndex`'s own mutex and `DocumentStore`'s `last_known`
+        // mutex are entirely separate, so once `quick_open_files` is genuinely async this is the
+        // first place two commands can actually overlap — this is that overlap, run for real
+        // rather than reasoned about. A `Barrier` makes the two threads start their operations at
+        // the same instant rather than merely both existing; without it, one could finish before
+        // the other starts and this would prove nothing beyond "sequential calls work."
+        use crate::document::DocumentStore;
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let root = tempdir().unwrap();
+        for i in 0..50 {
+            fs::write(root.path().join(format!("note{i}.md")), "x").unwrap();
+        }
+        let target = root.path().join("note0.md");
+
+        let store = DocumentStore::new();
+        let (_content, hash) = store.read(&target).unwrap();
+        let store = Arc::new(store);
+        let index = Arc::new(FileIndex::new());
+        let root_path = root.path().to_path_buf();
+        let barrier = Arc::new(Barrier::new(2));
+
+        let writer = {
+            let store = Arc::clone(&store);
+            let target = target.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                store.write(&target, "updated", &hash).unwrap()
+            })
+        };
+        let walker = {
+            let index = Arc::clone(&index);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                index.files(&root_path)
+            })
+        };
+
+        let new_hash = writer.join().unwrap();
+        let entries = walker.join().unwrap();
+
+        assert_eq!(
+            entries.len(),
+            50,
+            "the walk must see every file regardless of a concurrent write landing mid-scan"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "updated");
+        let (_, verify_hash) = store.read(&target).unwrap();
+        assert_eq!(
+            verify_hash, new_hash,
+            "the write's own result must match what's actually on disk afterwards"
+        );
     }
 }

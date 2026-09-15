@@ -210,20 +210,36 @@ pub fn document_write(
 
 /// Every `.md` file in the open workspace, for quick-open (Cmd+P, plan-v0.1.md increment 9, W-5).
 /// Deliberately the one command that walks the whole tree — `dir_list` stays one-level-at-a-time
-/// for N-2. Safe to call from a fresh app because it's a plain (non-`async`) command: Tauri runs
-/// it off the main thread, so even an uncached first walk can't block the dialog opening, and
-/// `FileIndex` caches the result per workspace root so repeat calls are cheap.
-#[tauri::command]
+/// for N-2.
+///
+/// `#[tauri::command(async)]` is load-bearing, not a style choice: a plain command is dispatched
+/// INLINE on the thread that receives the IPC message — the main/UI thread on macOS — with no
+/// `spawn_blocking` involved (verified by reading `tauri-macros`' `body_blocking` codegen directly,
+/// not assumed from the docs). Without `async` here, an uncached first walk of a large workspace
+/// would block the whole app, not just the dialog, for exactly as long as the walk this command
+/// exists to keep off the UI thread. `FileIndex` still caches the result per workspace root so
+/// repeat calls are cheap regardless.
+///
+/// The workspace root is copied out of the guard by a plain `let` before `index.files` runs, the
+/// same shape as `rescope_workspace`/`scope_and_watch_loose_document`: now that this command is
+/// genuinely async and can overlap with `dir_list`/`document_read`/`workspace_open`, holding the
+/// workspace lock for the walk's duration would block every one of them for as long as the walk
+/// takes — the exact hazard those two fixes exist to prevent, just newly reachable here too.
+#[tauri::command(async)]
 pub fn quick_open_files(
     workspace: State<'_, Mutex<Option<Workspace>>>,
     index: State<'_, FileIndex>,
 ) -> Result<Vec<QuickOpenEntry>, MeddError> {
-    let guard = workspace.lock().unwrap();
-    let ws = guard.as_ref().ok_or_else(|| MeddError::Io {
-        path: PathBuf::new(),
-        message: "no workspace open".to_string(),
-    })?;
-    Ok(index.files(ws.root()))
+    let root = workspace
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|ws| ws.root().to_path_buf())
+        .ok_or_else(|| MeddError::Io {
+            path: PathBuf::new(),
+            message: "no workspace open".to_string(),
+        })?;
+    Ok(index.files(&root))
 }
 
 /// Hands an http(s) link to the system browser (R-6). Calls the opener plugin's Rust API

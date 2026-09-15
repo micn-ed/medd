@@ -59,6 +59,24 @@ describe('opening the dialog', () => {
     expect(quickOpenLoading()).toBe(false)
   })
 
+  test('accepts keystrokes while the backend scan is still unresolved', async () => {
+    // QA's vacuity question for the "must not block the dialog opening" claim: would this test
+    // still pass if quick_open_files were synchronous? No -- a synchronous invoke() would have
+    // already resolved by the time setQuickOpenQuery below runs, and entries would be non-empty.
+    // The walk promise here is deliberately never resolved for the whole test, so every assertion
+    // happens while the backend call is still genuinely in flight, not just "before an await".
+    invokeMock.mockReturnValue(new Promise<QuickOpenEntry[]>(() => {}))
+
+    openQuickOpen()
+    setQuickOpenQuery('read')
+    moveQuickOpenSelection(1)
+
+    expect(quickOpenQuery()).toBe('read')
+    expect(quickOpenLoading()).toBe(true) // the scan genuinely hasn't settled
+    expect(quickOpenResults()).toEqual([]) // nothing to match against yet, not an error
+    expect(quickOpenSelectedIndex()).toBe(0) // clamped: moving selection into an empty list is a no-op
+  })
+
   test('resets the query and selection from whatever a previous session left behind', async () => {
     invokeMock.mockResolvedValue([entry('a.md'), entry('b.md')])
     openQuickOpen()
