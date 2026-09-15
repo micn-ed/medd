@@ -103,6 +103,23 @@ One Rust module per concern, each with a narrow public surface.
 `watcher.rs`'s emit loop. A shell contains no decisions. If a Tauri-aware function has a branch in
 it, it is in the wrong place.**
 
+**And no lock is held across a filesystem or OS call.** Every command was `ExecutionContext::
+Blocking` until increment 9, so commands could not overlap and a lock held across a syscall blocked
+nobody — there was nobody to block. The first `async` command makes that assumption false, and it
+makes two pre-existing sites real on the day it lands rather than at some later point: one holding
+the workspace guard across canonicalisation and an FSEvents registration, one holding *both* the
+workspace and watcher guards across a recursive registration over an entire tree. Copy what is
+needed out of the guard and release it before touching the filesystem — which is what
+`run_event_loop` already does, and the reason none of this was ever visible: the only concurrent
+actor in the system happened to be doing the right thing.
+
+Two constraints that are currently true by luck and should be true by rule. **Lock order is
+workspace → watcher**, consistently, so no AB/BA deadlock is waiting; say so where the second lock
+is taken, because the next person to add a lock site has nothing else telling them an order exists.
+And note that on **edition 2021 an `if let` scrutinee temporary lives for the whole body** — which
+is why one of those guards is held at all. Edition 2024 changes that, so an edition bump would
+silently fix this *and* silently change anything else relying on scrutinee temporary lifetimes.
+
 An earlier version of this rule said `commands.rs` was the only module that knew Tauri's *command
 macros* existed. That described an implementation detail and called it a boundary, and it let a
 second module become Tauri-aware without tripping it — `watcher.rs` imports `AppHandle`/`Emitter`
