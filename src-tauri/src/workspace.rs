@@ -138,6 +138,35 @@ pub struct TreeEntry {
     pub kind: EntryKind,
 }
 
+/// Whether **any** component of `path`, taken relative to `root`, is an ignored name — the leaf
+/// included.
+///
+/// One of the workspace predicates (§2), and the general form of which `is_ignored_name` is the
+/// leaf case: this is that question asked of a whole path rather than of one entry. It lived in
+/// `watcher.rs` until the quick-open walk needed it too, which was an accident of which consumer
+/// wanted it first — `watcher.rs`'s job is event coalescing, not defining what a workspace
+/// contains.
+///
+/// **Root-relative, deliberately.** A path that is not under `root` at all answers `false`: that is
+/// not this function's question, and answering it would mean a loose document's own directory
+/// (D-15) got judged against a root it was never inside. Relativity is also what makes a workspace
+/// that *is* a dotfile directory — someone opening `~/.dotfiles` to edit its README — work for
+/// free, since the root's own name is never among the components examined.
+///
+/// **The leaf is included here, and a caller that wants ancestors only says so at its own call
+/// site** (`watcher::is_ignored_ancestor`). That asymmetry is not a shared question with two
+/// answers: whether a *changed entry* should be filtered for its own name is a decision about
+/// watching, with a reason that belongs beside the watcher, and it is expressible as one line over
+/// this predicate rather than as a second implementation of it.
+pub fn is_within_ignored(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    relative
+        .components()
+        .any(|c| is_ignored_name(&c.as_os_str().to_string_lossy()))
+}
+
 /// Whether `path` resolves to a directory — **following symlinks**, which is the whole point of
 /// the name.
 ///
@@ -488,6 +517,61 @@ mod tests {
         let ws = Workspace::open(root.path()).unwrap();
         let result = ws.dir_list(elsewhere.path());
         assert!(matches!(result, Err(MeddError::OutsideWorkspace { .. })));
+    }
+
+    #[test]
+    fn is_within_ignored_catches_an_ignored_ancestor() {
+        let root = Path::new("/workspace");
+        assert!(is_within_ignored(root, &root.join(".git/HEAD")));
+        assert!(is_within_ignored(
+            root,
+            &root.join(".obsidian/workspace.json")
+        ));
+        assert!(is_within_ignored(
+            root,
+            &root.join("node_modules/pkg/index.js")
+        ));
+        assert!(is_within_ignored(root, &root.join("target/debug/medd")));
+    }
+
+    #[test]
+    fn is_within_ignored_includes_the_leaf() {
+        // The general form judges the whole path, leaf and all -- which is what the quick-open
+        // walk needs, because a symlink named `aliased` pointing straight at `node_modules` has
+        // the ignored name only in its *target's* leaf. A caller wanting ancestors only passes the
+        // parent; see `watcher::is_ignored_ancestor`.
+        let root = Path::new("/workspace");
+        assert!(is_within_ignored(root, &root.join("node_modules")));
+        assert!(is_within_ignored(root, &root.join(".env")));
+    }
+
+    #[test]
+    fn is_within_ignored_passes_an_ordinary_document() {
+        let root = Path::new("/workspace");
+        assert!(!is_within_ignored(root, &root.join("notes/todo.md")));
+    }
+
+    #[test]
+    fn is_within_ignored_never_counts_the_roots_own_name() {
+        // `~/.dotfiles` opened deliberately to edit its README. Being root-relative is what makes
+        // this work without a special case.
+        let root = Path::new("/Users/me/.dotfiles");
+        assert!(!is_within_ignored(root, &root.join("README.md")));
+        assert!(!is_within_ignored(root, &root.join("nvim/init.lua")));
+        // and it still catches an ignored directory *inside* such a root
+        assert!(is_within_ignored(root, &root.join("node_modules/x")));
+    }
+
+    #[test]
+    fn is_within_ignored_declines_paths_outside_the_root() {
+        // Not this function's question: a loose document (D-15) lives outside the root and must
+        // not be judged against it.
+        let root = Path::new("/workspace");
+        assert!(!is_within_ignored(root, Path::new("/elsewhere/loose.md")));
+        assert!(!is_within_ignored(
+            root,
+            Path::new("/elsewhere/node_modules/x")
+        ));
     }
 
     #[test]
