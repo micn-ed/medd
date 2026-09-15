@@ -15,6 +15,20 @@
 # reports a kill, and reads exactly like a healthy one. Mutants need RE-DERIVING after a refactor,
 # not merely re-running.
 #
+# WHY IT RUNS THE WHOLE SUITE, AND WHY NOT TO "OPTIMISE" THAT. Running a mutant against only the
+# test written for it tells you that test passes. Running it against the suite tells you WHICH test
+# is carrying the property — and those differ more often than is comfortable. A real case here: the
+# symlink-following mutant survived the test written for it (the document was still reachable by
+# its real path, so both the count and the assertion held) and was killed by a test on the tree
+# side, where following is observable. A narrow run would have reported a survivor and sent someone
+# to write a test that already existed — which is worse than no information, because a false gap
+# looks exactly like a real one.
+#
+# This is a different failure from the aim problem above: there, the mutant pointed at nothing.
+# Here it was aimed correctly and the property was genuinely covered — what was wrong was the map
+# of what covered it. Running per-mutant instead of per-suite is the obvious speed-up, it is a
+# reasonable-looking change, and it silently removes the thing this script is for.
+#
 # WHY IT COMPARES NAMES, NOT COUNTS. Counting failures is only valid against a green baseline. With
 # any test red for an unrelated reason, a mutant can flip one red test green and one green test
 # red, leave the count identical, and read as a clean survivor. That happened here: it hid two
