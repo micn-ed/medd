@@ -2,6 +2,7 @@
 // (see README), but this is harmless to leave in place.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::mpsc;
 use std::sync::Mutex;
 
 use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
@@ -26,9 +27,9 @@ mod workspace;
 /// it still flushes, but through `RunEvent::WindowEvent`'s `CloseRequested`, not `ExitRequested`:
 /// an architect review found that `ExitRequested` on the window-close route fires only *after* the
 /// window (and the webview the flush needs) is already destroyed, so `main`'s handler catches both
-/// event shapes rather than assuming one covers every exit — see `begin_shutdown_and_flush`. This
-/// keeps the conventional keyboard route to closing the window from disappearing as a side effect
-/// of freeing up Cmd+W.
+/// event shapes rather than assuming one covers every exit — see `QuitCoordinator::decide` and
+/// `start_flush_thread`. This keeps the conventional keyboard route to closing the window from
+/// disappearing as a side effect of freeing up Cmd+W.
 ///
 /// **Quit is a custom item, not `PredefinedMenuItem::quit`.** This is not cosmetic: on macOS,
 /// `PredefinedMenuItem::quit` maps to `[NSApp terminate:]`, whose only cancellation point
@@ -126,10 +127,10 @@ fn main() {
 
             app.on_menu_event(|app_handle, event| match event.id().as_ref() {
                 "quit" => app_handle.exit(0),
-                // `WindowEvent::CloseRequested` is deliberately left unintercepted: closing the
-                // window is meant to proceed exactly as it always has (and, under I-2, exit the
-                // app once it's the last one), the same as if the user had clicked the traffic
-                // light. Only the *keyboard route* to that action needed to move off Cmd+W.
+                // Just asks the window to close, exactly as if the user had clicked the traffic
+                // light — `RunEvent::WindowEvent`'s `CloseRequested` arm below is what actually
+                // intercepts that (to flush) before it's allowed to proceed. Only the *keyboard
+                // route* to this action needed to move off Cmd+W.
                 "close-window" => {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         let _ = window.close();
@@ -169,60 +170,53 @@ fn main() {
         // webview is still alive to flush. `WindowEvent::CloseRequested` (the traffic light,
         // Cmd+Shift+W) does NOT reach `ExitRequested` until the window — and the webview inside
         // it — has already been destroyed, so a version that only hooked `ExitRequested` silently
-        // flushed nothing on every window-close route. Both call `begin_shutdown_and_flush` rather
-        // than each growing its own copy of the flush logic, for the same reason `flushAutosave`
-        // is a primitive with two callers instead of inline code in each.
+        // flushed nothing on every window-close route.
+        //
+        // Neither arm decides anything itself — architecture.md §2, "a shell contains no
+        // decisions" — it only asks `QuitCoordinator::decide` and mechanically acts on the answer:
+        // call the event's own prevent function or don't, start the flush thread or don't. The
+        // decision logic (is this the first request, has the flush finished, should a repeat
+        // press be let through) lives entirely in quit.rs, where it can be — and is — tested
+        // without a Tauri type in sight.
         //
         // A future Dock "Quit" or `SIGTERM`/`SIGKILL` still terminate via AppKit/the OS with no
         // hook at all reachable from here — nothing can flush those; see quit.rs's own doc comment.
         match event {
             RunEvent::ExitRequested { api, .. } => {
-                let coordinator = app_handle.state::<quit::QuitCoordinator>();
-                if coordinator.is_ready_to_exit() {
-                    // This *is* the flush thread's own completion `exit()` call re-triggering the
-                    // event — the only case allowed through unprevented.
-                    return;
+                let decision = app_handle.state::<quit::QuitCoordinator>().decide();
+                if decision.prevent {
+                    api.prevent_exit();
                 }
-                api.prevent_exit();
-                begin_shutdown_and_flush(app_handle, &coordinator);
+                if let Some(rx) = decision.start_flush {
+                    start_flush_thread(app_handle.clone(), rx);
+                }
             }
             RunEvent::WindowEvent {
                 event: WindowEvent::CloseRequested { api, .. },
                 ..
             } => {
-                let coordinator = app_handle.state::<quit::QuitCoordinator>();
-                if coordinator.is_ready_to_exit() {
-                    return; // as above: let the exit this module itself triggered proceed
+                let decision = app_handle.state::<quit::QuitCoordinator>().decide();
+                if decision.prevent {
+                    api.prevent_close();
                 }
-                api.prevent_close();
-                begin_shutdown_and_flush(app_handle, &coordinator);
+                if let Some(rx) = decision.start_flush {
+                    start_flush_thread(app_handle.clone(), rx);
+                }
             }
             _ => {}
         }
     });
 }
 
-/// Starts the flush-and-wait thread if (and only if) nothing has started one yet — a repeat
-/// trigger of either kind (the user pressing the quit gesture again, or `CloseRequested` racing an
-/// already-in-progress `ExitRequested` flush) must not spawn a second thread racing the first, and
-/// must not be read as "yes, I mean it": an architect review found that reading was backwards.
-/// Because the frontend's flush is a handful of writes finishing in milliseconds once the debounce
-/// is cancelled, medd will almost always have exited before a human presses twice — so a
-/// second-press-skips-the-wait rule does nothing in the common case, and in the rare case it *does*
-/// fire it is because a write is genuinely stalled, which is exactly when truncating the wait is
-/// most expensive. A repeat trigger is therefore just prevented again by the caller above and
-/// otherwise ignored; `QUIT_FLUSH_CEILING` remains the only way out of a flush that never settles.
-fn begin_shutdown_and_flush(app_handle: &AppHandle, coordinator: &quit::QuitCoordinator) {
-    let Some(rx) = coordinator.begin_shutdown() else {
-        return;
-    };
-
-    // Ask the frontend to flush (doc/doc.ts's `flushAll`) and wait for every path to reach
-    // quiescence, then report back — but the bound below is what actually decides when medd
-    // exits. The frontend's signal can only make that happen sooner.
+/// Asks the frontend to flush (doc/doc.ts's `flushAll`) and waits, bounded, for it to reach
+/// quiescence before actually exiting. Only ever called with the receiver from a `decide()` call
+/// that returned `start_flush: Some(_)` — the first exit-shaped event, never a repeat.
+fn start_flush_thread(app_handle: AppHandle, rx: mpsc::Receiver<()>) {
+    // The frontend's signal (`quit_ready`) can only make the exit below happen sooner than
+    // `QUIT_FLUSH_CEILING`, never later — see quit.rs's own doc comment for why that direction
+    // only matters.
     let _ = app_handle.emit("app:before-quit", ());
 
-    let handle = app_handle.clone();
     std::thread::spawn(move || {
         if !quit::wait_for_quit_signal(&rx, quit::QUIT_FLUSH_CEILING) {
             eprintln!(
@@ -230,7 +224,9 @@ fn begin_shutdown_and_flush(app_handle: &AppHandle, coordinator: &quit::QuitCoor
                 quit::QUIT_FLUSH_CEILING
             );
         }
-        handle.state::<quit::QuitCoordinator>().mark_ready_to_exit();
-        handle.exit(0);
+        app_handle
+            .state::<quit::QuitCoordinator>()
+            .mark_ready_to_exit();
+        app_handle.exit(0);
     });
 }

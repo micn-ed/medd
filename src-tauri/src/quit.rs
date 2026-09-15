@@ -46,25 +46,42 @@ use std::time::Duration;
 /// soak test to check it against rather than the budget above.
 pub const QUIT_FLUSH_CEILING: Duration = Duration::from_secs(3);
 
+/// What an event handler in `main.rs` should do about one exit-shaped event (`ExitRequested`, or
+/// `WindowEvent::CloseRequested`). Returned by `QuitCoordinator::decide` so that *deciding* stays
+/// out of `main.rs` entirely — architecture.md §2: "a shell contains no decisions; if a
+/// Tauri-aware function has a branch in it, it is in the wrong place." The first version of this
+/// module put the decision in `main.rs`'s own `RunEvent` match, which is exactly the shape that
+/// left it with no test seam: the same tell as `watcher.rs`'s `run_event_loop`, where the function
+/// holding the `AppHandle` turned out to be the one nothing could reach. `main.rs` now only ever
+/// asks `decide()` a question and acts on the two fields below — no branch of its own beyond
+/// calling `prevent_exit`/`prevent_close` or not, and starting the flush thread or not.
+pub struct ExitDecision {
+    /// Whether the caller must call `prevent_exit()`/`prevent_close()` on this event.
+    pub prevent: bool,
+    /// `Some(rx)` exactly when this is the request that should start the flush-and-wait thread —
+    /// the first request, and only the first. `None` covers both "already flushing" (a repeat
+    /// request, still `prevent`ed) and "ready to exit" (not `prevent`ed at all).
+    pub start_flush: Option<mpsc::Receiver<()>>,
+}
+
 /// Coordinates the one shutdown flush, however it was triggered. Two pieces of state, deliberately
 /// not one flag doing double duty (an architect review found the original single-flag version
 /// conflated two different callers that need opposite treatment):
 ///
-/// - `shutting_down` — set the instant either event handler first fires. Its job is purely "has a
-///   flush already been started", so a second, overlapping trigger (a stray `CloseRequested` while
-///   an `ExitRequested`-driven flush is already running, or vice versa) doesn't spawn a second
-///   flush thread racing the first.
+/// - `shutting_down` — set the instant `decide()` first runs. Its job is purely "has a flush
+///   already been started", so a second, overlapping trigger (a stray `CloseRequested` while an
+///   `ExitRequested`-driven flush is already running, or vice versa) doesn't spawn a second flush
+///   thread racing the first.
 /// - `ready_to_exit` — set only by this module's own background thread, once the frontend has
-///   reported done or the ceiling has expired. This is the *only* condition under which a
-///   handler in `main.rs` may skip calling `prevent_exit()`/`prevent_close()`. A repeat user
-///   request (pressing Cmd+Q again, or clicking the close button again) before this is set is
-///   *not* treated as "yes, I mean it" — an architect review reversed that original design: because
-///   a healthy flush is a handful of writes finishing in milliseconds, medd will almost always have
-///   exited before a human can press twice, so a "second press skips the wait" rule does nothing in
-///   the common case and, in the rare case it *does* fire, does it exactly when a write is stalled
-///   and the user's edit is most at risk. A repeat press now just prevents again and changes
-///   nothing; the ceiling remains the only way out of a genuinely stuck flush, and force-quit
-///   remains for a genuinely stuck ceiling.
+///   reported done or the ceiling has expired. This is the *only* condition under which `decide()`
+///   answers `prevent: false`. A repeat user request (pressing Cmd+Q again, or clicking the close
+///   button again) before this is set is *not* treated as "yes, I mean it" — an architect review
+///   reversed that original design: because a healthy flush is a handful of writes finishing in
+///   milliseconds, medd will almost always have exited before a human can press twice, so a
+///   "second press skips the wait" rule does nothing in the common case and, in the rare case it
+///   *does* fire, does it exactly when a write is stalled and the user's edit is most at risk. A
+///   repeat press now just prevents again and changes nothing; the ceiling remains the only way
+///   out of a genuinely stuck flush, and force-quit remains for a genuinely stuck ceiling.
 ///
 /// One more dependency worth stating because nothing enforces it: **this is safe as a one-way
 /// latch only because nothing here can cancel a quit once it has begun.** If a future "you have
@@ -87,11 +104,25 @@ impl QuitCoordinator {
         }
     }
 
-    /// Called from the first exit-shaped event of either kind. `Some(rx)` the first time only —
-    /// the caller should start the flush-and-wait thread on it. `None` on every call after,
-    /// meaning a flush is already underway and there is nothing further to start; the caller
-    /// should still prevent *this* event (see `is_ready_to_exit`), just not begin a second flush.
-    pub fn begin_shutdown(&self) -> Option<mpsc::Receiver<()>> {
+    /// The single decision point for both exit-shaped events. See `ExitDecision` for why this
+    /// exists and what a caller does with the result.
+    pub fn decide(&self) -> ExitDecision {
+        if self.is_ready_to_exit() {
+            return ExitDecision {
+                prevent: false,
+                start_flush: None,
+            };
+        }
+        ExitDecision {
+            prevent: true,
+            start_flush: self.begin_shutdown(),
+        }
+    }
+
+    /// `Some(rx)` the first call only — the flush-and-wait thread should be started on it. `None`
+    /// on every call after, meaning a flush is already underway and there is nothing further to
+    /// start.
+    fn begin_shutdown(&self) -> Option<mpsc::Receiver<()>> {
         let mut shutting_down = self.shutting_down.lock().unwrap();
         if *shutting_down {
             return None;
@@ -104,15 +135,13 @@ impl QuitCoordinator {
     }
 
     /// Whether the flush-and-wait thread has finished (by signal or by ceiling) and is about to
-    /// call `AppHandle::exit()` itself. The only condition under which an event handler may let an
-    /// exit-shaped event proceed unprevented — everything before this point, including repeats,
-    /// gets prevented and otherwise ignored.
-    pub fn is_ready_to_exit(&self) -> bool {
+    /// call `AppHandle::exit()` itself.
+    fn is_ready_to_exit(&self) -> bool {
         *self.ready_to_exit.lock().unwrap()
     }
 
     /// Called by the flush-and-wait thread immediately before it triggers the real exit, so the
-    /// `RunEvent` that call produces is recognised as the one to let through.
+    /// `RunEvent` that call produces is recognised (via `decide()`) as the one to let through.
     pub fn mark_ready_to_exit(&self) {
         *self.ready_to_exit.lock().unwrap() = true;
     }
@@ -164,6 +193,11 @@ mod tests {
 
     #[test]
     fn returns_false_once_the_ceiling_elapses_with_no_signal() {
+        // NOTE for whoever meets a hung test suite here: a mutant that replaces the bounded
+        // `recv_timeout` with an unbounded `recv()` does not fail this test -- it hangs it,
+        // because `_tx` below is deliberately kept alive so the channel never disconnects on its
+        // own. A suite that blocks instead of going red on this file means look here first, not
+        // at the environment.
         let (_tx, rx) = mpsc::channel::<()>();
         // _tx is kept alive (not dropped) so this exercises the timeout path specifically,
         // rather than the "sender dropped" disconnect path recv_timeout also treats as an error.
@@ -173,31 +207,55 @@ mod tests {
         assert!(start.elapsed() >= Duration::from_millis(50));
     }
 
+    // `decide()` is the seam an architect review asked for: the repeat-press behaviour used to be
+    // a branch inside main.rs's Tauri-aware RunEvent handler, which is exactly the shape
+    // (architecture.md §2's "a shell contains no decisions") that left it untestable without
+    // spinning up a real app. These tests pin it directly, no Tauri types involved.
+
     #[test]
-    fn begin_shutdown_returns_a_receiver_only_the_first_time() {
+    fn the_first_decision_prevents_and_starts_the_flush() {
         let coordinator = QuitCoordinator::new();
-        assert!(coordinator.begin_shutdown().is_some());
+        let decision = coordinator.decide();
+        assert!(decision.prevent);
+        assert!(decision.start_flush.is_some());
+    }
+
+    #[test]
+    fn a_repeat_decision_before_ready_prevents_again_and_starts_nothing() {
+        let coordinator = QuitCoordinator::new();
+        coordinator.decide(); // the first request, already started a flush
+
+        let repeat = coordinator.decide(); // a second press, or CloseRequested racing it
+
         assert!(
-            coordinator.begin_shutdown().is_none(),
-            "a second overlapping trigger (a repeat press, or CloseRequested racing \
-             ExitRequested) must not start a second flush thread"
+            repeat.prevent,
+            "a repeat request must still be prevented -- 'yes, I mean it' was the reversed ruling"
+        );
+        assert!(
+            repeat.start_flush.is_none(),
+            "must not start a second flush thread racing the first"
         );
     }
 
     #[test]
-    fn is_ready_to_exit_is_false_until_marked() {
+    fn once_ready_the_decision_stops_preventing_and_starts_nothing_new() {
         let coordinator = QuitCoordinator::new();
-        coordinator.begin_shutdown();
-        assert!(!coordinator.is_ready_to_exit());
-
+        coordinator.decide();
         coordinator.mark_ready_to_exit();
-        assert!(coordinator.is_ready_to_exit());
+
+        let decision = coordinator.decide();
+
+        assert!(
+            !decision.prevent,
+            "the flush thread's own completion exit() call must be allowed through"
+        );
+        assert!(decision.start_flush.is_none());
     }
 
     #[test]
-    fn signal_ready_wakes_the_receiver_returned_by_begin_shutdown() {
+    fn signal_ready_wakes_the_receiver_from_the_first_decision() {
         let coordinator = QuitCoordinator::new();
-        let rx = coordinator.begin_shutdown().unwrap();
+        let rx = coordinator.decide().start_flush.unwrap();
 
         coordinator.signal_ready();
 
