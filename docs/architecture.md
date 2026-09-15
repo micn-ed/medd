@@ -509,6 +509,47 @@ The bundle identifier is `com.micned.medd`, and the bundle targets are `app` and
 matching the macOS-only scope (D-10).
 Two files, deliberately separate:
 
+**The atomic-write protocol has its own owner, `atomic.rs`.** `pub(crate) fn write(target,
+content, new_file_mode)`, called by both `document.rs` and `state.rs`, with the staging-file naming
+(`TEMP_PREFIX`, `target_of_temp`, `is_staging_file`) moving with it — those are properties of the
+*protocol*, not of documents, which is why the watcher was already importing a staging-file
+predicate from `document.rs`.
+
+The alternative — making `document::atomic_write` public — was rejected because it **downgrades a
+structural property to a convention.** "No document write bypasses the compare-and-swap" currently
+holds because `atomic_write` is private and its only caller CASes first; a `pub` would leave that
+true only by everyone remembering. The extraction keeps it structural: the CAS stays in
+`DocumentStore::write`, which remains the only function that writes a *document*.
+
+Two consequences that must be decided rather than inherited. **`write` creates an absent target**,
+because `atomic_write`'s precondition — that the target already exists, so its permissions can be
+copied — is free for a compare-and-swap write that has just read the file, and **false for both
+state files on first run.** Left as-is, the very first `state.json` save returns `NotFound`, and so
+does the directory above it: Tauri's path API *resolves* Application Support, it does not create
+it. Both fail only on a fresh install, which is the one configuration the person building this is
+least likely to be in. And **the caller supplies the mode for a newly created file**, since there
+is no target to copy from: `0o644` for documents, `0o600` for state, which records the paths of
+everything the user works on.
+
+**State-file staging litter is never swept, and that is accepted.** The sweep is guarded to
+Markdown targets, so `.medd-state.json.tmp` is correctly not medd's business as far as that guard
+can tell — which is the `.md` guard's own documented failure mode arriving one increment later, in
+the words it was written in. It failed *safe*, which is the better outcome. One stale temp file per
+interrupted write, in an invisible directory with no `git status` to surface it, is not worth a
+second sweep path.
+
+**Recents and the last workspace are validated on read, not merely parsed.** Both this section and
+increment 11 handled a file that fails to parse and neither mentioned one that parses perfectly and
+names paths that are gone — which is the **commoner** case: corruption needs a crash mid-write,
+staleness needs only time. A project renamed, a clone deleted, a drive unmounted. So: drop recents
+whose directory no longer exists, and treat a dead last workspace as *no workspace*, which lands on
+the welcome pane — exactly where the user wants to be. And **the cap is enforced on read as well as
+write**: ten thousand recents in a hand-edited file parses fine and takes the success path.
+
+**The corruption path's own failure must also be non-fatal.** A naturally written `fs::rename(…)?`
+for the `.bak` propagates and kills startup — precisely what this rule exists to prevent. Defaults
+are used *regardless of whether the backup succeeded*.
+
 **`settings.json` — the user's, human-editable.** Autosave delay, theme preference, font size.
 Written only when the user changes a setting. A human may edit it by hand and medd will not
 clobber it.
@@ -519,7 +560,15 @@ change, and on quit.
 
 Keeping them apart is the whole point: session state churns every few seconds, and mixing
 hand-editable preferences into a file the app rewrites on a timer guarantees that hand edits are
-eventually lost. Both are JSON, both are written through the same atomic write path as documents
+eventually lost.
+
+**The no-clobber guarantee is currently true for a weaker reason than this section implies**, and
+that is worth stating before someone relies on it. In v0.1 nothing writes `settings.json` at all —
+there is no preferences UI (P-5 is a *Could*), so the only writer is the hand edit. Once a
+preferences UI exists, changing one setting writes medd's whole in-memory `Settings` and silently
+discards any hand edit made since load. That is D-11's lost-update problem in a second place, and
+it is unsolved. Not a v0.1 defect; a sentence that reads as a property of the design when it is a
+property of the current feature set. Both are JSON, both are written through the same atomic write path as documents
 (§3) — a crash during a state save must not produce a truncated file that stops the app launching.
 
 **Corrupt or unreadable state is not fatal.** A file that fails to parse is renamed to
