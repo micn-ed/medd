@@ -65,6 +65,13 @@ preferences UI; table editing helpers; scroll sync between panes.
 The original three-way launch requirement, completed.
 
 - Finder integration: `.md` association, "Open With → medd", double-click to open
+- **Drag and drop a `.md` file onto the window to open it as a tab.** Deliberately grouped here
+  rather than in v0.1: it is the same family as Finder double-click — a file arriving from the
+  Finder — and splitting the two across releases would be incoherent. It is *not* covered by D-8's
+  rejection of drag-and-drop, which is about inserting images into a document; this is a launch
+  path. Today the gesture does nothing at all, which is a missing feature rather than a fault:
+  Tauri's own drop handling is enabled, so the WebView does not navigate to the file. A navigation
+  would have been a security finding.
 - Neovim plugin: a `:Medd` command and suggested keymap that hands the current buffer's file to
   the running app and focuses the window
 - All three paths verified to converge on a single running instance
