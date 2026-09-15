@@ -119,6 +119,39 @@ should follow and the reason the watcher thread has never made this visible.
 **Criterion, generalised: no lock is held across a filesystem or OS call.** Copy what is needed out
 and release first. Two existing sites need it; the walk must not add a third.
 
+### 3b. Verifying the extraction: the signature has to take an *owned* root
+
+The extraction only removes the possibility if the extracted function cannot be handed a guard.
+The obvious check is that it takes a root rather than an `&Workspace` — but that is not sufficient,
+and the insufficient version is the one Rust style will push a reviewer toward.
+
+`&Path` **reads as extracted and achieves nothing.** `ws.root()` borrows out of the `Workspace`,
+which borrows out of the `MutexGuard`, so the guard must stay alive for the whole call. Only an
+owned `PathBuf` makes the guard impossible to hold, because it cannot outlive the statement that
+produced it. Demonstrated:
+
+```
+&Path   : lock available during call? false     <- guard still held
+PathBuf : lock available during call? true      <- guard released
+```
+
+`fn scope_and_watch(root: &Path, ...)` is the idiomatic signature, would pass review, and leaves
+the invariant exactly as violated as before — with the added cost that it now looks addressed.
+`fn scope_and_watch(root: PathBuf, ...)` — or taking `&Path` from a root the caller has already
+copied out — is the one that holds.
+
+**Criterion: check the signature, not the call site.** A call site that currently copies first can
+be edited back; a signature that only accepts owned data cannot be, without the change being
+visible in the diff as a type change.
+
+### 3c. The comment is a convention living in code
+
+`conventions.md` records that an invariant belongs where it is enforced. The lock-order comment is
+that rule applied to a comment: it goes at the `watcher.lock()` line in each of the two functions —
+the point where the *second* lock is taken, which is where ordering begins to matter and where
+someone adding a third is looking at a working example. **Criterion: it is at the acquisition, not
+at the top of the file.** A file-header note is read once, by someone who is not yet adding a lock.
+
 ---
 
 ## 4. Concurrency becomes tested, not merely assumed
