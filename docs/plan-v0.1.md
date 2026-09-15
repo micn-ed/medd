@@ -500,6 +500,14 @@ therefore `DocumentStore::write`. No new command taking a list of buffers, no Ru
 for shutdown. The close-flush is therefore to be built as a primitive with more
 than one caller, since quit is the second.
 
+From QA's systematic mutation sweep over `tabs.svelte.ts` and `doc.ts` — both coverage findings,
+not defects; the code is correct in each case:
+
+| # | Finding | Why it matters |
+|---|---|---|
+| 9 | `does not fire when the buffer is not dirty` is vacuous | `scheduleAutosave` is reachable only through `onDocChanged`, which fires only on an edit — so the test opens a tab, edits nothing, and no autosave is ever scheduled, meaning the dirty guard never runs. Mutation-proven: deleting the guard does not kill it. The test that would exercise it is a real scenario rather than a contrivance — edit, then let a clean external reload land *before* the timer fires, so the tab is clean when `requestWrite` runs. Someone types, a `git checkout` reverts the file to match, and the pending timer must not write. |
+| 10 | The `markSynced` invariant is protected only by accident | Mutating `markSynced` to record `tab.currentText` instead of `syncedText` — exactly the bug its own comment warns about — is killed by a *single* test about `waitForQuiescence` chaining, which is about something else entirely. The bug it silently guards: type `A`, the write starts carrying `A`, type `B`, the write settles, `markSynced` records `AB` as what is on disk. `dirty` becomes false, so **`B` is never written and never will be** — a lost keystroke, no banner, no error, in the increment built to prevent exactly that. The invariant survives only as a side effect of a test that could be restructured for unrelated reasons by someone with no idea what went with it. One explicit test, named for the invariant: *a write's outcome records what was written, not what the buffer holds when it settles.* |
+
 From QA's retroactive pass over increments 1-6 and 8:
 
 | # | Finding | Why it matters |

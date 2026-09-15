@@ -94,7 +94,15 @@ quit had to happen first. The spec was reviewed by three people and the omission
 constraint*, which is the kind of detail that reads as implementation noise right up until it is
 the entire test.
 
-**And a test must be able to detect that it has stopped testing anything.** Where a test depends on
+**And a test must be able to detect that it has stopped testing anything.**
+
+**Measure mutation kills by the *set of failing test names*, never by the count.** Counting is
+only valid against a fully green baseline, and a project with legitimately-red tests — a queued
+finding, a known defect not yet fixed — silently breaks the arithmetic. It happened here: under
+one mutant the failure count stayed at three and read as a clean survivor, while underneath, two
+baseline-red tests had flipped *green* (they assert a state clears, which disabling the mechanism
+also achieves) and two others had flipped red. Two real kills, perfectly masked, and the sum looked
+correct. The conclusion would have been "this mechanism is entirely uncovered", which was false. Where a test depends on
 a timing window, a race, or an environment property, assert that property rather than assuming it —
 otherwise a slow machine or a cold start quietly converts a real test into a vacuous one that stays
 green, which is worse than a failure because nobody investigates a pass.
