@@ -257,6 +257,22 @@ more than the finding was.
 
   The rules below still apply — a worktree removes the class of accident, not the need for care.
 
+  **Why the prohibition wasn't enough is worth stating, because it generalises.** A rule phrased as
+  *don't do X* invites arguing about scope, and a rule phrased as *the purpose is Y* invites
+  deciding your case doesn't serve Y. Neither violation here came from looking for a loophole —
+  both came from reading for the rule's purpose, concluding in good faith that this case didn't
+  engage it, and acting. A structure that removes the judgement needs neither reading.
+
+- **Announce the act, not the outcome.** *"The tree is back how you expect"* and *"I ran
+  `git checkout --` on a file in your working directory"* are different sentences, and only one is
+  a warning. Stating an effect reads as tidying; it lets the writer feel they disclosed something
+  while leaving the reader no way to connect a later surprise to its cause. That happened here —
+  a destructive operation was described by its result, in a status paragraph, and the person whose
+  file vanished spent time investigating a mystery that had already been "announced".
+
+  The general form: **a disclosure that does not name the action is not a disclosure.** If someone
+  would have to infer what you did, you did not say it.
+
 - **If someone else's work disappears, pin it before anything else.** `git tag wip/<what>
   <sha-from-reflog>` makes an orphaned commit permanently reachable and takes nothing from anyone.
   Then tell whoever owns it and let *them* restore it: they know what state they left it in, and
