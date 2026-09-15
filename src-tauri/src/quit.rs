@@ -17,26 +17,64 @@
 //! autosave for those, and quitting must not silently resolve a conflict in either direction on
 //! the user's behalf. The banner already on screen (or lack of one, for a detached tab) is the
 //! only warning that edit does not survive the quit.
+//!
+//! Two Tauri events reach this coordinator, from `main.rs`: `RunEvent::ExitRequested` (Cmd+Q's
+//! custom menu item, or `AppHandle::exit()` called programmatically) and
+//! `RunEvent::WindowEvent { event: WindowEvent::CloseRequested, .. }` (the traffic light,
+//! Cmd+Shift+W). They must share this one coordinator rather than each growing its own flush
+//! logic: an architect review of the first version found that `CloseRequested` reaches
+//! `ExitRequested` only *after* the window — and with it the webview the flush needs to run in —
+//! is already destroyed, so a version that only handled `ExitRequested` silently flushed nothing
+//! on every window-close route.
 
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::time::Duration;
 
 /// How long the app waits for the frontend to report every pending write has landed before
-/// exiting anyway. Deliberately a few seconds, not longer: an editor that cannot be quit because
-/// one write never settles is worse than losing that one write, and the user forcing a kill loses
-/// everything else in flight too. Deliberately not shorter: truncating an ordinary flush that was
-/// about to finish loses the very edit this exists to save. Chosen to comfortably exceed the
-/// ~1s autosave debounce plus a real (not stalled) disk write, with headroom.
+/// exiting anyway. This is a budget, not a guess: `flushAll` (`doc/doc.ts`) cancels every pending
+/// debounce timer and issues the writes immediately, so the ~1s autosave debounce is *not* part of
+/// what this waits out. What it actually covers is N serialised `DocumentStore::write` calls (one
+/// `fsync` each, and Rust's own store-wide mutex means they queue rather than overlap) — at a
+/// pessimistic ten dirty tabs, with each `fsync` running tens to low hundreds of milliseconds under
+/// concurrent filesystem load (a `git checkout`, Spotlight indexing), that's on the order of one
+/// second. 3s is roughly 3x that worst case. It is not scaled by the number of dirty tabs on
+/// purpose: the ceiling exists to bound a write that *never settles*, and a stalled write doesn't
+/// get more dangerous as more tabs are open, so an adaptive bound would perversely grant the
+/// pathological case more time exactly when there's more to lose. This number belongs on
+/// increment 12's measurement list, same category as the large-document thresholds, once there's a
+/// soak test to check it against rather than the budget above.
 pub const QUIT_FLUSH_CEILING: Duration = Duration::from_secs(3);
 
-/// Tracks whether a shutdown flush is already underway, and the channel the frontend's
-/// `quit_ready` command signals on once it has flushed everything it can. `AppHandle::exit()`
-/// itself re-triggers `RunEvent::ExitRequested` — without this guard, the exit issued once the
-/// flush completes (or times out) would loop back into `begin_shutdown` and prevent itself again,
-/// forever.
+/// Coordinates the one shutdown flush, however it was triggered. Two pieces of state, deliberately
+/// not one flag doing double duty (an architect review found the original single-flag version
+/// conflated two different callers that need opposite treatment):
+///
+/// - `shutting_down` — set the instant either event handler first fires. Its job is purely "has a
+///   flush already been started", so a second, overlapping trigger (a stray `CloseRequested` while
+///   an `ExitRequested`-driven flush is already running, or vice versa) doesn't spawn a second
+///   flush thread racing the first.
+/// - `ready_to_exit` — set only by this module's own background thread, once the frontend has
+///   reported done or the ceiling has expired. This is the *only* condition under which a
+///   handler in `main.rs` may skip calling `prevent_exit()`/`prevent_close()`. A repeat user
+///   request (pressing Cmd+Q again, or clicking the close button again) before this is set is
+///   *not* treated as "yes, I mean it" — an architect review reversed that original design: because
+///   a healthy flush is a handful of writes finishing in milliseconds, medd will almost always have
+///   exited before a human can press twice, so a "second press skips the wait" rule does nothing in
+///   the common case and, in the rare case it *does* fire, does it exactly when a write is stalled
+///   and the user's edit is most at risk. A repeat press now just prevents again and changes
+///   nothing; the ceiling remains the only way out of a genuinely stuck flush, and force-quit
+///   remains for a genuinely stuck ceiling.
+///
+/// One more dependency worth stating because nothing enforces it: **this is safe as a one-way
+/// latch only because nothing here can cancel a quit once it has begun.** If a future "you have
+/// unresolved conflicts — really quit?" prompt ever makes the decision reversible, both this
+/// coordinator's latch and `doc.ts`'s `isShuttingDown` latch need an explicit clear path added on
+/// cancel, or autosave stays silently off for the rest of the session — the worst-shaped bug this
+/// product can have.
 pub struct QuitCoordinator {
     shutting_down: Mutex<bool>,
+    ready_to_exit: Mutex<bool>,
     tx: Mutex<Option<mpsc::Sender<()>>>,
 }
 
@@ -44,13 +82,15 @@ impl QuitCoordinator {
     pub fn new() -> Self {
         QuitCoordinator {
             shutting_down: Mutex::new(false),
+            ready_to_exit: Mutex::new(false),
             tx: Mutex::new(None),
         }
     }
 
-    /// Called from `RunEvent::ExitRequested`. `Some(rx)` the first time — the caller should
-    /// prevent the exit and wait on the returned receiver — `None` on every call after, which is
-    /// what the exit this module itself triggers must see so it can actually go through.
+    /// Called from the first exit-shaped event of either kind. `Some(rx)` the first time only —
+    /// the caller should start the flush-and-wait thread on it. `None` on every call after,
+    /// meaning a flush is already underway and there is nothing further to start; the caller
+    /// should still prevent *this* event (see `is_ready_to_exit`), just not begin a second flush.
     pub fn begin_shutdown(&self) -> Option<mpsc::Receiver<()>> {
         let mut shutting_down = self.shutting_down.lock().unwrap();
         if *shutting_down {
@@ -61,6 +101,20 @@ impl QuitCoordinator {
         let (tx, rx) = mpsc::channel();
         *self.tx.lock().unwrap() = Some(tx);
         Some(rx)
+    }
+
+    /// Whether the flush-and-wait thread has finished (by signal or by ceiling) and is about to
+    /// call `AppHandle::exit()` itself. The only condition under which an event handler may let an
+    /// exit-shaped event proceed unprevented — everything before this point, including repeats,
+    /// gets prevented and otherwise ignored.
+    pub fn is_ready_to_exit(&self) -> bool {
+        *self.ready_to_exit.lock().unwrap()
+    }
+
+    /// Called by the flush-and-wait thread immediately before it triggers the real exit, so the
+    /// `RunEvent` that call produces is recognised as the one to let through.
+    pub fn mark_ready_to_exit(&self) {
+        *self.ready_to_exit.lock().unwrap() = true;
     }
 
     /// Called from the `quit_ready` command once the frontend has flushed and awaited quiescence.
@@ -125,9 +179,19 @@ mod tests {
         assert!(coordinator.begin_shutdown().is_some());
         assert!(
             coordinator.begin_shutdown().is_none(),
-            "a second ExitRequested -- the one this module's own exit() call re-triggers -- must \
-             not prevent the exit all over again"
+            "a second overlapping trigger (a repeat press, or CloseRequested racing \
+             ExitRequested) must not start a second flush thread"
         );
+    }
+
+    #[test]
+    fn is_ready_to_exit_is_false_until_marked() {
+        let coordinator = QuitCoordinator::new();
+        coordinator.begin_shutdown();
+        assert!(!coordinator.is_ready_to_exit());
+
+        coordinator.mark_ready_to_exit();
+        assert!(coordinator.is_ready_to_exit());
     }
 
     #[test]

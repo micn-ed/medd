@@ -29,6 +29,13 @@ const AUTOSAVE_DEBOUNCE_MS = 1000
 // since that wait — and the read behind it — is exactly the kind of new work the latch is for, not
 // merely "no new writes" narrowly read. `flushAll`/`flushAutosave` are deliberately exempt: their
 // whole job is draining what was already owed before the latch closed.
+//
+// Safe as a one-way latch only because nothing today can *cancel* a quit once Rust's
+// `RunEvent` handler has committed to it (quit.rs's `QuitCoordinator` mirrors this same
+// dependency on its own side). If a future "you have unresolved conflicts — really quit?" prompt
+// ever makes that decision reversible, this latch needs an explicit clear-on-cancel path added,
+// or autosave stays silently off for the rest of the session — the worst-shaped bug this product
+// can have.
 let isShuttingDown = false
 
 export function isQuitInProgress(): boolean {
