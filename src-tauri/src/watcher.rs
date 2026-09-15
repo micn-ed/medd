@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::document::{ContentHash, DocumentStore, ExternalChange};
 use crate::quickopen::FileIndex;
-use crate::workspace::{is_ignored_name, Workspace};
+use crate::workspace::{is_within_ignored, Workspace};
 
 const COALESCE_WINDOW: Duration = Duration::from_millis(100);
 
@@ -49,25 +49,24 @@ impl FsWatcher {
     }
 }
 
-/// True if `path` is noise the watcher should never surface from *within* `workspace_root` —
-/// inside `.git/`, `node_modules/`, `target/`, or a dotfile directory somewhere between the root
-/// and the changed entry (`is_ignored_name`, `workspace.rs` — shared with `dir_list` and
-/// `quickopen`'s walk so the three don't quietly disagree about what "ignored" means).
-/// Deliberately root-relative rather than checked against the absolute path: a
-/// workspace that itself lives under, or even *is*, a dotfile directory (someone opens their
-/// `~/.dotfiles` to edit its README) must not have everything inside it silently ignored just
-/// because the root's own name happens to start with a dot. `path` not being under
-/// `workspace_root` at all (a loose document's own watch, which has no "root" in this sense)
-/// answers `false` — that call belongs to whoever is scoping tree:changed, not to this function.
-pub fn is_ignored_in_workspace(workspace_root: &Path, path: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(workspace_root) else {
-        return false;
-    };
-    let mut components: Vec<_> = relative.components().collect();
-    components.pop(); // the changed entry's own name is never filtered for its own name
-    components
-        .iter()
-        .any(|c| is_ignored_name(&c.as_os_str().to_string_lossy()))
+/// Whether a watcher-reported `path` sits inside an ignored part of `workspace_root` — checking
+/// its **ancestors only**, never its own name.
+///
+/// The workspace-definition half of this question is `workspace::is_within_ignored`, shared with
+/// `dir_list` and quick-open's walk. What stays here is the one thing that is a decision about
+/// *watching* rather than about what a workspace contains: **a changed entry is never filtered for
+/// its own name.** The watcher's job is to report that something happened, and an entry medd would
+/// not open can still be the reason the tree needs relisting — a `.env` appearing is a real change
+/// to a real directory. Ancestry is about where the change is; the leaf is about what changed, and
+/// only the first decides whether medd cares.
+///
+/// One line over the shared predicate, not a second implementation of it — which is the point: if
+/// the ignore rules change, they change in one place, and this file keeps only its own reason.
+pub fn is_ignored_ancestor(workspace_root: &Path, path: &Path) -> bool {
+    match path.parent() {
+        Some(parent) => is_within_ignored(workspace_root, parent),
+        None => false,
+    }
 }
 
 /// Reduces a debounced batch to the distinct paths worth considering at all — a single
@@ -122,7 +121,7 @@ pub fn run_event_loop(rx: mpsc::Receiver<DebounceEventResult>, app: AppHandle) {
 
         for path in paths_to_check(&events) {
             if let Some(root) = &workspace_root {
-                if is_ignored_in_workspace(root, &path) {
+                if is_ignored_ancestor(root, &path) {
                     continue;
                 }
             }
@@ -174,53 +173,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ignores_anything_under_a_dotfile_directory_within_the_workspace() {
+    fn a_changed_entry_is_never_ignored_for_its_own_name() {
+        // The watcher's own decision, and the only part of the ignore question that lives in this
+        // file. `workspace::is_within_ignored` would say `true` for both of these -- correctly,
+        // for its own callers. Here they must be `false`: something changed inside a directory
+        // medd cares about, and what changed is not what decides that.
         let root = Path::new("/workspace");
-        assert!(is_ignored_in_workspace(root, &root.join(".git/HEAD")));
-        assert!(is_ignored_in_workspace(
-            root,
-            &root.join(".obsidian/workspace.json")
-        ));
+        assert!(!is_ignored_ancestor(root, &root.join(".env")));
+        assert!(!is_ignored_ancestor(root, &root.join("node_modules")));
     }
 
     #[test]
-    fn ignores_anything_under_node_modules_within_the_workspace() {
+    fn an_ignored_ancestor_is_still_ignored() {
+        // The composition is doing its job: the shared predicate's answer for the *parent*.
         let root = Path::new("/workspace");
-        assert!(is_ignored_in_workspace(
+        assert!(is_ignored_ancestor(root, &root.join(".git/HEAD")));
+        assert!(is_ignored_ancestor(
             root,
             &root.join("node_modules/pkg/index.js")
         ));
-    }
-
-    #[test]
-    fn does_not_ignore_an_ordinary_document() {
-        let root = Path::new("/workspace");
-        assert!(!is_ignored_in_workspace(root, &root.join("notes/todo.md")));
-    }
-
-    #[test]
-    fn does_not_ignore_a_dotfile_that_is_itself_the_changed_entry() {
-        let root = Path::new("/workspace");
-        // Not a document medd would ever open, but the filter is about ancestry, not the leaf.
-        assert!(!is_ignored_in_workspace(root, &root.join(".env")));
-    }
-
-    #[test]
-    fn does_not_ignore_a_workspace_whose_own_root_is_a_dotfile_directory() {
-        // A `~/.dotfiles` repo, opened deliberately to edit its README — the root's own name
-        // must never count against anything inside it.
-        let root = Path::new("/Users/me/.dotfiles");
-        assert!(!is_ignored_in_workspace(root, &root.join("README.md")));
-        assert!(!is_ignored_in_workspace(root, &root.join("nvim/init.lua")));
-    }
-
-    #[test]
-    fn a_path_outside_the_root_entirely_is_not_this_functions_call() {
-        let root = Path::new("/workspace");
-        assert!(!is_ignored_in_workspace(
-            root,
-            Path::new("/elsewhere/loose.md")
-        ));
+        assert!(is_ignored_ancestor(root, &root.join("target/debug/medd")));
+        assert!(!is_ignored_ancestor(root, &root.join("notes/todo.md")));
     }
 
     #[test]

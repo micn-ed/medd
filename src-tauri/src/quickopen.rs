@@ -20,7 +20,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
-use crate::workspace::{is_ignored_name, is_markdown, resolves_to_directory};
+use crate::workspace::{is_ignored_name, is_markdown, is_within_ignored, resolves_to_directory};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -130,7 +130,18 @@ fn walk_markdown_files(root: &Path) -> Vec<QuickOpenEntry> {
                 let Ok(canonical) = path.canonicalize() else {
                     continue;
                 };
-                if canonical.starts_with(&canonical_root) && visited.insert(canonical) {
+                // The `is_ignored_name` check above tests the entry's *own* name, which is enough
+                // for a real directory — the walk meets every level on the way down, so an
+                // ignored ancestor is refused before its children are ever seen. A symlink skips
+                // that: `aliased -> node_modules/docs` is named `aliased`, so nothing above
+                // catches it, and following it used to put every file under `node_modules` back
+                // into Cmd+P — the exact outcome the shared ignore predicate exists to prevent,
+                // reached by the one route it did not cover. So the *target* is judged too, by
+                // the general form of the same predicate.
+                if canonical.starts_with(&canonical_root)
+                    && !is_within_ignored(&canonical_root, &canonical)
+                    && visited.insert(canonical)
+                {
                     stack.push(path);
                 }
             } else if is_markdown(&name_str) {
@@ -331,6 +342,43 @@ mod tests {
             "unexpected route: {:?}",
             names_of(&entries)
         );
+    }
+
+    #[test]
+    fn a_symlink_into_an_ignored_directory_is_not_followed() {
+        // The bypass that arrived with following. `is_ignored_name` judges each entry's own name,
+        // which a symlink sidesteps: this link is named `aliased`, so nothing about it is ignored,
+        // and its target's ignored name is in the *target's* path. Before the fix this put every
+        // document under `node_modules` into Cmd+P.
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
+        fs::write(root.path().join("node_modules/pkg/README.md"), "x").unwrap();
+        fs::write(root.path().join("real.md"), "x").unwrap();
+        std::os::unix::fs::symlink(
+            root.path().join("node_modules/pkg"),
+            root.path().join("aliased"),
+        )
+        .unwrap();
+
+        let entries = walk_markdown_files(root.path());
+
+        assert_eq!(names_of(&entries), vec!["real.md"]);
+    }
+
+    #[test]
+    fn a_symlink_pointing_straight_at_an_ignored_directory_is_not_followed() {
+        // The leaf case, and why the shared predicate includes the leaf: here the ignored name is
+        // the *last* component of the target, so an ancestors-only check would miss it.
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("target")).unwrap();
+        fs::write(root.path().join("target/generated.md"), "x").unwrap();
+        fs::write(root.path().join("real.md"), "x").unwrap();
+        std::os::unix::fs::symlink(root.path().join("target"), root.path().join("aliased"))
+            .unwrap();
+
+        let entries = walk_markdown_files(root.path());
+
+        assert_eq!(names_of(&entries), vec!["real.md"]);
     }
 
     #[test]
