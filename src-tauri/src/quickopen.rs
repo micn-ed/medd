@@ -474,4 +474,54 @@ mod tests {
             "the write's own result must match what's actually on disk afterwards"
         );
     }
+
+    #[test]
+    fn the_tree_and_the_walk_agree_on_what_is_in_the_workspace() {
+        use crate::workspace::{EntryKind, Workspace};
+        use tempfile::Builder;
+
+        // An AGREEMENT test, deliberately not a behaviour test: it does not encode whether a
+        // symlinked directory should be part of the workspace, because that question has not been
+        // ruled on. It encodes that there must be *one* answer. Whichever way the ruling goes,
+        // this keeps `dir_list` and `walk_markdown_files` from answering it differently -- which
+        // is the sixth time on this project that two places have held the same knowledge and
+        // quietly disagreed.
+        //
+        // The disagreement it pins: `dir_list` classifies with `fs::metadata()`, which FOLLOWS
+        // symlinks, so a symlinked directory renders as a `Directory` and expands in the sidebar.
+        // The walk classifies with `DirEntry::file_type()`, which does NOT, so it never descends.
+        // The user sees the documents in the tree, opens them, and cannot find them in Cmd+P.
+        let root = Builder::new().prefix("medd-agree-").tempdir().unwrap();
+        let elsewhere = Builder::new().prefix("medd-target-").tempdir().unwrap();
+        std::fs::write(elsewhere.path().join("linked.md"), "# linked").unwrap();
+        std::fs::write(root.path().join("plain.md"), "# plain").unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.path().join("linked-dir")).unwrap();
+
+        let ws = Workspace::open(root.path()).unwrap();
+
+        // What the TREE says is a directory worth expanding, at the top level.
+        let tree_dirs: Vec<String> = ws
+            .dir_list(ws.root())
+            .unwrap()
+            .into_iter()
+            .filter(|e| matches!(e.kind, EntryKind::Directory))
+            .map(|e| e.name)
+            .collect();
+
+        // What the WALK descended into, inferred from what it returned.
+        let walked: Vec<String> = walk_markdown_files(ws.root())
+            .into_iter()
+            .map(|e| e.relative_path)
+            .collect();
+
+        let tree_offers_the_symlink = tree_dirs.iter().any(|n| n == "linked-dir");
+        let walk_entered_the_symlink = walked.iter().any(|p| p.contains("linked-dir"));
+
+        assert_eq!(
+            tree_offers_the_symlink, walk_entered_the_symlink,
+            "the tree and quick-open must agree about whether a symlinked directory is part of \
+             the workspace. tree offers it as a directory: {tree_offers_the_symlink}; the walk \
+             descends into it: {walk_entered_the_symlink}. tree_dirs={tree_dirs:?} walked={walked:?}"
+        );
+    }
 }
