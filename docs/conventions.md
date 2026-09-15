@@ -246,6 +246,23 @@ more than the finding was.
   the message and the flag as filenames. Found on the first real use of the rule by someone other
   than its author, which is the usual way an under-specified instruction gets found.
 
+- **Work in a `git worktree`, not a shared checkout.** `git worktree add ../medd-<task>` gives a
+  separate working directory on its own branch, sharing the same object store — so nothing is
+  duplicated but the checkout, and **another session physically cannot stash, reset or check out
+  your files.** This is the structural version of every rule below it, and it exists because those
+  rules were not enough: the convention against mutating a shared tree was violated twice, by two
+  different people who had both read it, within hours of being written. A rule that depends on
+  attention fails exactly when attention is elsewhere, which on a shared tree is most of the time.
+  Both incidents were recovered only because someone checked the reflog before doing anything else.
+
+  The rules below still apply — a worktree removes the class of accident, not the need for care.
+
+- **If someone else's work disappears, pin it before anything else.** `git tag wip/<what>
+  <sha-from-reflog>` makes an orphaned commit permanently reachable and takes nothing from anyone.
+  Then tell whoever owns it and let *them* restore it: they know what state they left it in, and
+  reaching into someone's half-finished work to be helpful is the same class of mistake that lost
+  it.
+
 - **Never `stash`, `reset`, or `checkout` the shared tree to get a clean state — copy it.** Also
   learned by doing. Running `git stash` to get an uncontaminated test read removed a colleague's
   in-flight work from under them mid-edit; it was restored within a minute, and only because it was
