@@ -130,6 +130,9 @@ run_rust() {
     git checkout --quiet -- src-tauri
     check "$label" "$TMP/base" "$TMP/mut"
   done <<'MUTANTS'
+is_ignored_name stops excluding target/~src-tauri/src/workspace.rs~name.starts_with('.') || matches!(name, "node_modules" | "target")~name.starts_with('.') || matches!(name, "node_modules")
+is_ignored_name stops excluding node_modules/~src-tauri/src/workspace.rs~name.starts_with('.') || matches!(name, "node_modules" | "target")~name.starts_with('.') || matches!(name, "target")
+is_ignored_name stops excluding dotfiles~src-tauri/src/workspace.rs~name.starts_with('.') || matches!(name, "node_modules" | "target")~false || matches!(name, "node_modules" | "target")
 compare-and-swap no longer rejects a stale hash~src-tauri/src/document.rs~        if current_hash != *expected_hash {~        if false && current_hash != *expected_hash {
 a repeat exit request is let through (the reversed-away rule)~src-tauri/src/quit.rs~            start_flush: self.begin_shutdown(),~            start_flush: { let s = self.begin_shutdown(); if s.is_none() { return ExitDecision { prevent: false, start_flush: None } } s },
 decide() ignores ready_to_exit (the app cannot be quit)~src-tauri/src/quit.rs~        if self.is_ready_to_exit() {~        if false && self.is_ready_to_exit() {
