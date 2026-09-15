@@ -79,6 +79,46 @@ by holding a lock the old code could hold safely.
 filesystem.** Testable directly — take the lock on another thread mid-walk and confirm it is
 available.
 
+### 3a. The async command makes two *existing* lock-across-syscall sites live
+
+Sharper than I first put it. The hazard is not only that the new walk might hold the workspace
+lock — it is that **two places already do, and nothing has been able to notice.** Every command
+today is `ExecutionContext::Blocking`, so commands cannot overlap each other; a lock held across a
+syscall blocks nobody because there is nobody to block. The async command is the first thing that
+can contend, which makes both existing sites real on the day increment 9 lands, not later.
+
+`document_read` (`commands.rs:111`):
+
+```rust
+if let Some(ws) = workspace.lock().unwrap().as_ref() {
+    if let Ok(canonical) = path.canonicalize() {          // syscall
+        let _ = app.asset_protocol_scope().allow_directory(dir, false);
+        let _ = watcher.lock().unwrap().watch_non_recursive(dir);   // FSEvents registration
+```
+
+The guard is a temporary in the `if let` scrutinee, and on **edition 2021** those live for the
+whole `if let` body. Verified rather than read off the reference — the same shape, compiled with
+`--edition 2021`:
+
+```
+guard STILL HELD inside the if-let body  <- edition 2021
+copy-then-use: guard released before the body   <- safe
+```
+
+(Edition 2024 changes this. `src-tauri/Cargo.toml` says `edition = "2021"`, so the guard is held.)
+
+`workspace_open` (`commands.rs:63-71`) is the heavier one: it holds **both** the workspace and
+watcher locks across `watch_recursive(ws.root())` — registering a recursive FSEvents watch over an
+entire tree.
+
+Lock *order* is consistent (workspace → watcher at both sites), so there is no AB/BA deadlock, and
+that is worth keeping true rather than discovering later. The existing background contender,
+`run_event_loop`, copies the root out and releases immediately, which is the pattern the walk
+should follow and the reason the watcher thread has never made this visible.
+
+**Criterion, generalised: no lock is held across a filesystem or OS call.** Copy what is needed out
+and release first. Two existing sites need it; the walk must not add a third.
+
 ---
 
 ## 4. Concurrency becomes tested, not merely assumed
