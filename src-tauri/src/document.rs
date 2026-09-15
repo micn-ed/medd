@@ -1148,4 +1148,104 @@ mod tests {
             other => panic!("expected Conflict, got {other:?}"),
         }
     }
+
+    // ---------------------------------------------------------------- acceptance: CRLF joins
+    // The halves are covered above: check_external_change emits LF, and write restores CRLF.
+    // These cover the JOIN — the path a user actually walks — and the cases where the line
+    // ending itself changes, where "detect on read, restore on write" stops being a round-trip
+    // and becomes a decision about someone else's file.
+
+    #[test]
+    fn external_crlf_change_then_edit_then_autosave_keeps_the_file_crlf() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "a\r\nb\r\nc\r\n").unwrap();
+        let store = DocumentStore::new();
+        store.read(&target).unwrap();
+
+        fs::write(&target, "a\r\nB\r\nc\r\n").unwrap();
+
+        let (content, hash) = match store.check_external_change(&target) {
+            Some(ExternalChange::Changed { content, hash }) => (content, hash),
+            other => panic!("expected Changed, got {other:?}"),
+        };
+        assert_eq!(content, "a\nB\nc\n", "the payload must be LF for the frontend");
+
+        // The frontend adopts that hash as its CAS baseline and the user edits the LF buffer.
+        let edited = content.replace("c", "C");
+        store
+            .write(&target, &edited, &hash)
+            .expect("the hash from check_external_change must satisfy the CAS against disk");
+
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "a\r\nB\r\nC\r\n",
+            "the file must still be CRLF, differing only by the edit"
+        );
+    }
+
+    #[test]
+    fn a_file_externally_converted_to_lf_is_not_silently_converted_back_to_crlf() {
+        // dos2unix, or a .gitattributes change and a re-checkout. That is a deliberate act on
+        // the user's file; medd editing it afterwards must not quietly undo it.
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "a\r\nb\r\nc\r\n").unwrap();
+        let store = DocumentStore::new();
+        store.read(&target).unwrap();
+
+        fs::write(&target, "a\nb\nc\n").unwrap();
+
+        let (content, hash) = match store.check_external_change(&target) {
+            Some(ExternalChange::Changed { content, hash }) => (content, hash),
+            other => panic!("expected Changed, got {other:?}"),
+        };
+        store.write(&target, &content.replace("b", "B"), &hash).unwrap();
+
+        let on_disk = fs::read_to_string(&target).unwrap();
+        assert_eq!(on_disk, "a\nB\nc\n");
+        assert!(!on_disk.contains('\r'));
+    }
+
+    #[test]
+    fn a_file_externally_converted_to_crlf_is_written_back_as_crlf() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "a\nb\nc\n").unwrap();
+        let store = DocumentStore::new();
+        store.read(&target).unwrap();
+
+        fs::write(&target, "a\r\nb\r\nc\r\n").unwrap();
+
+        let (content, hash) = match store.check_external_change(&target) {
+            Some(ExternalChange::Changed { content, hash }) => (content, hash),
+            other => panic!("expected Changed, got {other:?}"),
+        };
+        assert_eq!(content, "a\nb\nc\n");
+        store.write(&target, &content.replace("b", "B"), &hash).unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "a\r\nB\r\nc\r\n");
+    }
+
+    #[test]
+    fn write_to_a_path_only_ever_seen_by_check_external_change_still_restores_crlf() {
+        // `read()` is the usual way a path enters `last_known`, not the only one:
+        // check_external_change inserts it too. A write keyed off that entry needs the same
+        // line-ending fidelity as one keyed off a read.
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "a\r\nb\r\n").unwrap();
+        let store = DocumentStore::new();
+        let (_, first_hash) = store.read(&target).unwrap();
+
+        fs::write(&target, "a\r\nb\r\nc\r\n").unwrap();
+        let (content, hash) = match store.check_external_change(&target) {
+            Some(ExternalChange::Changed { content, hash }) => (content, hash),
+            other => panic!("expected Changed, got {other:?}"),
+        };
+        assert_ne!(hash, first_hash);
+
+        store.write(&target, &format!("{content}d\n"), &hash).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "a\r\nb\r\nc\r\nd\r\n");
+    }
 }
