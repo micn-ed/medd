@@ -99,6 +99,11 @@ a world where the mechanism never runs. A redundant test fails correctly — it 
 others that catch the same mutant. Conflating them argues away useful tests using an argument built
 for useless ones.
 
+The operational test: **a vacuous test passes when the mechanism doesn't run; a redundant test
+fails when the mechanism breaks, but so do others.** The first is a defect in the test. The second
+is a fact about the *suite*, and only a reason to delete if the duplication also carries no other
+value.
+
 The distinction that decides it is *form*. A case assertion says the output is a specific expected
 value; a **differential** assertion says the output is unchanged by some addition. The second does
 not need to know the right answer, only that something shouldn't move it — so it survives changes
@@ -239,6 +244,26 @@ already failing for the wrong reason keeps failing after the fix, and announces 
 and red the moment the defect is fixed, failing *specifically* on a value mismatch. Say in a header
 that it asserts wrong behaviour deliberately, and mark each assertion with what it should become.
 The fix is then a mechanical diff.
+
+---
+
+## Put the honest account in the artifact, not in the transmission
+
+A report can be accurate while the thing it reports on overclaims, because they are **different
+objects and only one of them ships.** That happened here: a test's mutation result was described
+honestly in a message — *"its value is entirely in the route that doesn't exist yet"* — while the
+comment inside the file said it already covered those routes. The transmission was right and the
+artifact was wrong, which is the wrong way round. Nobody reads the message in six months.
+
+Two consequences.
+
+**Review the artifact, not the description of it.** This is a stronger argument than *trust but
+verify*, because the summary can be honest and the thing still be wrong. Verifying the summary
+against the reporter's intent catches dishonesty; only reading the code catches this.
+
+**When you write an honest caveat in a message, check it also exists where the work lives.** The
+caveat is usually written at the moment of greatest clarity about the work's limits, and that is
+exactly the moment it is easiest to spend on the transmission and forget the file.
 
 ---
 
