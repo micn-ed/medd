@@ -276,6 +276,24 @@ the workspace.
 **Where it lives:** with the consumer that was added *later* — that's the side that can drift from
 an already-established answer.
 
+**A parked red test is a forcing function, and that is a property of the mechanism rather than of
+any one finding.** When this project's symlink disagreement was first ruled, it was deferred to the
+next release. What reversed that was not the test's content but the **parking decision**: a
+deferral would have meant a known-red test sitting on a side branch for a release, and known-red
+tests rot. A red test on a branch is *a claim with a cost attached*, and costs get sequenced in a
+way that observations in a document do not.
+
+It cuts both ways, and the caveat is the reason it works: it is leverage **because** parked red
+tests are genuinely expensive, which is also the reason not to park many of them. A symbolic cost
+would not have moved the schedule.
+
+**Say in the test's own comment which failure it now guards.** An agreement test's *character*
+changes once the shared predicate exists — before, it catches two mechanisms drifting apart; after,
+the only way it can fail is if someone stops *calling* the predicate. That is narrower and rarer,
+which is exactly the shape that eventually reads as a test that cannot fail and invites deletion.
+The comment should say what it guards and what deleting it costs — nothing today, and the next
+instance later. In the file, where *"why is this here?"* actually gets asked.
+
 **And the test is the detector, not the fix.** A disagreement between two places holding the same
 knowledge is structural, and this project's own answer to it is a shared predicate — `is_markdown`
 and `is_ignored_name` both exist so their question cannot be answered twice. An agreement test
