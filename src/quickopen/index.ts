@@ -1,1 +1,1 @@
-// Cmd+P fuzzy matcher and dialog. Defined in increment 9.
+export { default as QuickOpenDialog } from './QuickOpenDialog.svelte'

@@ -71,6 +71,18 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
       return hashOf(file.content) as unknown as T
     }
 
+    case 'quick_open_files':
+      // Every markdown path in the fixture, flattened — the real command walks the whole
+      // workspace tree (deliberately the one place in the app that does), so a flat Object.keys
+      // scan over the fixture is a faithful enough stand-in; there's no lazy-cache behaviour here
+      // worth modelling since the harness has no watcher to invalidate it.
+      return Object.keys(FILES)
+        .filter((path) => path.toLowerCase().endsWith('.md'))
+        .map((path) => ({
+          path,
+          relativePath: path.slice(ROOT.length + 1),
+        })) as unknown as T
+
     case 'open_external':
       // eslint-disable-next-line no-console
       console.log('[harness] open_external', args?.url)

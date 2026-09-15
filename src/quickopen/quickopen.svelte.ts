@@ -1,5 +1,12 @@
 // Quick-open dialog state (Cmd+P, plan-v0.1.md increment 9, W-5).
 //
+// The dialog component lives in QuickOpenDialog.svelte, not QuickOpen.svelte, deliberately: this
+// file's own name is quickopen.svelte.ts, and on the case-insensitive filesystem this project
+// develops on, `QuickOpen.svelte` and `quickopen.svelte` (the stem Vite's resolver would look for
+// before trying `.ts`) are the same path -- an import meant for this module would silently resolve
+// to the compiled Svelte component instead. tabs/ and doc/ never hit this because their component
+// and state-module names don't collide case-insensitively (TabBar vs tabs, ConflictBanner vs doc).
+//
 // Opening the dialog (`openQuickOpen`) flips `isOpen` synchronously and only *then* kicks off the
 // backend workspace scan — the scan's promise is never awaited before the dialog is considered
 // open. That ordering is the actual point: plan-v0.1.md is explicit that "a workspace scan must
