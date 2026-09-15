@@ -302,6 +302,23 @@ symlinked directory of notes is visible in the sidebar and absent from search. T
 two enumerations agree; it deliberately does not encode whether a symlinked directory belongs to
 the workspace.
 
+**Write the detector by route, not by case.** *"Walking a root with `node_modules/docs/hidden.md`
+must return the same thing whether or not an alias to that directory exists"* is a statement about
+a **route into an ignored location**. *"A symlink named `aliased` pointing at `node_modules` is
+excluded"* is a statement about one case. The first catches hardlinked directories, a future
+include-file, a bind mount — whatever reaches the excluded place sideways next. The second catches
+the instance you already found.
+
+This is the agreement test one level out: instead of asserting two consumers agree, assert that
+**adding a new path to the same content changes nothing**. Both are decision-independent, and both
+survive the fix that prompted them.
+
+**Be explicit about what a green agreement test does not evidence.** It establishes that two sides
+answer alike — not *how*, and not that either mechanism works. When symlink-following turned out to
+be currently inert here, the agreement test passed either way, which is correct: it asserts the
+match, never the mechanism. Saying so prevents the green being cited later as evidence for
+something it never claimed.
+
 **Not everything that looks shared should be shared.** A question two callers both *could* ask is
 only a shared predicate if they are asking the same question for the same reason. `dir_list` needs
 to know whether an entry resolves to anything at all, because it has a category for the answer
