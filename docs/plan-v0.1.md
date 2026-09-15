@@ -364,12 +364,61 @@ That is QA's finding 1 generalised from one tab to the whole app, behind a keyst
 "close one tab" to the user's fingers. P-2 promises closing a tab is safe; nothing promises
 quitting is, and under D-5 no user has reason to draw that line.
 
+**The two halves are coupled for correctness, not merely sequenced for UX — do not split them.**
+`RunEvent::ExitRequested` is produced from exactly two places in `tauri-runtime-wry`: the last
+window being destroyed, and a programmatic `AppHandle::exit()`. **Cmd+Q reaches neither.** It is
+`[NSApp terminate:]`, whose only cancellation point is `applicationShouldTerminate:`, which `tao`
+does not implement — so it goes straight to `LoopDestroyed` → `RunEvent::Exit`, unpreventable and
+already committed. `Exit` is unusable for a flush in any case: it arrives inside a delegate
+callback, `tao` drops the event-loop callback immediately after, and the WebView cannot be pumped
+from there. Since the frontend owns the document text, **Rust cannot flush on that path even in
+principle.**
+
+A flush built on `ExitRequested` alone would cover window-close and programmatic exit, miss the
+most common quit gesture on macOS entirely, and pass every test written against `ExitRequested`.
+
+The fix is nearly free and exists *only* because the Cmd+W remap already replaces `Menu::default`:
+build Quit as a **custom** item with a `Cmd+Q` accelerator whose handler calls `app.exit(0)`,
+routing through `RequestExit` → `ExitRequested` → preventable → flush → real exit. Deferring the
+menu work would therefore silently stop the flush covering its own main path.
+
+`terminate:` still arrives from the Dock's Quit, the force-quit dialog, and SIGTERM/SIGKILL, and
+nothing can flush those. **That is why the atomic-write guarantee is the real protection and the
+flush is an optimisation on top of it** — the flush must never be treated as the thing keeping the
+file safe.
+
 Both halves ship together: fixing the keystroke alone hides the data loss behind a rarer gesture,
 and fixing the flush alone leaves an editor that quits on Cmd+W. The keystroke needs a custom menu
 replacing `Menu::default` (Quit stays Cmd+Q); the flush needs `ExitRequested` + `prevent_exit()`,
 asking the frontend to flush and exiting when it reports done. Its invariant is the close-flush's
 with clause 2 vacuous: **the exit must issue everything the debounce still owes, and the outcome of
-those writes applies to nothing.** The close-flush is therefore to be built as a primitive with more
+those writes applies to nothing.** Four more, worked out ahead of the code:
+
+- **The bound is a Rust-side timer that exits regardless of what the frontend says**; the
+  frontend's "done" may only make it sooner. If the frontend is the only thing that can end the
+  wait, a JS exception or an already-crashed WebView leaves medd *unquittable*, and the user's only
+  recourse is force-quit — the one path with no flush at all. Prefer a short bound: an expired
+  bound costs a second of typing, an unquittable editor costs everything.
+- **The handler is idempotent and a second request must not restart the bound.** With no
+  "flushing" UI, a user who presses Cmd+Q and sees nothing presses it again. Better still, a second
+  request *skips* the remaining wait — that is what the gesture means, and it is a way out that
+  isn't force-quit.
+- **Shutdown latches**: once it begins, `scheduleAutosave` is a no-op and `applyExternalContent` is
+  suppressed. The watcher is live during the drain, and a `document:changed-on-disk` on a clean tab
+  reschedules autosave — so quiescence recedes by a second, repeatedly, and a `git checkout`
+  landing during shutdown is enough. Without the latch the bound is terminating a drain bug rather
+  than guarding an unlikely one.
+- **A quit-time write must be able to be rejected.** A direct write would surrender atomicity, but
+  the subtler loss is the compare-and-swap: skipping the hash re-check overwrites an external
+  change made while medd sat idle — what D-11 exists to prevent — and at quit there is no chance of
+  a banner, so it resolves silently in medd's favour on the one path where the user isn't watching.
+  If a CAS fails during the flush, **drop that write and exit**; do not force it through. Losing an
+  edit is recoverable because the user still has their file; silently overwriting someone else's
+  change is not.
+
+Mechanically these reduce to one rule: every quit-time write goes through `document_write` and
+therefore `DocumentStore::write`. No new command taking a list of buffers, no Rust-side shortcut
+for shutdown. The close-flush is therefore to be built as a primitive with more
 than one caller, since quit is the second.
 
 From QA's retroactive pass over increments 1-6 and 8:
@@ -379,6 +428,7 @@ From QA's retroactive pass over increments 1-6 and 8:
 | 7 | Every image renders with `alt=""` | `imageResolution` replaces markdown-it's image rule and drops the step that copies inline children into `alt`. More than accessibility: `images.ts` argues a broken-image icon is "the correct, honest signal" for a remote image the CSP blocks — and that argument depends on the alt surviving, because the alt is what tells the reader what didn't load. A documented rationale silently stops being true. One line, before the `src` rewrite. |
 | 6 | The find/replace panel is unthemed — a light slab in the dark editor | `EditorView.theme({…})` is called with no second argument, so CodeMirror tags the editor light regardless of the colours it paints; the dark rules ship and never match. Not `{dark: true}` — that is static and medd's scheme is decided at runtime by `prefers-color-scheme`. Drive the panel from the app's own variables, as the rest of the file does. |
 | 8 | The harness fixture claims R-1…R-7 and contains no images | R-4 is the missing one, and it is the requirement with the silent-failure history (CSP blocking `data:`; remote images deliberately not rendering). A `data:` image renders for real in the harness and is genuine coverage; a relative one only proves the rewrite fired. Both, labelled for what each proves. |
+| — | Interrupted writes leave `.medd-*.tmp` litter | `atomic_write` removes the temp file only on its own error path, and a process exit is not one. The target is safe — that is increment 2's guarantee and it holds — but the litter accumulates one per interrupted write, invisible in medd's tree because dotfiles are hidden and very visible in `git status`, in a workspace that is usually a git repo. Sweep in `workspace_open`, not the exit path: an interrupted exit cannot clean up after itself. Only sweep files older than about a minute, so the documented two-instance race cannot have one instance delete another's in-flight temp file. |
 | — | `--error` keeps its light value under the dark media query | Marginal contrast on a dark canvas. A value to set, not a finding. |
 
 Record now, fix before v0.3: **own writes emit `tree:changed`**. An atomic write reports three
