@@ -152,6 +152,27 @@ files changed* is the thing actually being waited for.
 **Re-ask whenever the implementation approach changes**, which is precisely when nobody thinks to:
 the change that makes a detector blind is the same change that has everyone's attention elsewhere.
 
+**And when a detector produces a false positive, fix the verification, not the trigger.** This is a
+*different* failure from the one above and a worse one, and it was arrived at while correcting for
+the first — so it is recorded separately rather than folded in.
+
+After a watch fired on an unrelated commit, the instinct was to narrow it: key on identifier names
+guessed from a design discussion rather than on the file changing at all. **Narrowing feels like
+precision and buys silence.** If the implementation had chosen different names, that watch would
+never have fired, and the wait would have looked exactly like "not landed yet."
+
+The trade is not symmetric:
+
+> **A false fire costs one verification. A missed fire costs the whole task.**
+
+So prefer the trigger that is guaranteed to fire and cannot be clever — a file changing — and put
+the intelligence in the verification step, which is where correctness actually lives and which
+happens either way. A cheap trigger plus mandatory verification beats a clever trigger, every time.
+
+Best of all: make the trigger carry its own instruction not to be trusted. A watch whose output
+line reads *"verify by running the test — do not infer"* cannot be mistaken for a result by whoever
+reads it next, including its author a week later.
+
 ---
 
 ## A tool whose failure mode is silence must fail loudly when it does nothing
