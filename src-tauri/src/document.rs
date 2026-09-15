@@ -1169,7 +1169,10 @@ mod tests {
             Some(ExternalChange::Changed { content, hash }) => (content, hash),
             other => panic!("expected Changed, got {other:?}"),
         };
-        assert_eq!(content, "a\nB\nc\n", "the payload must be LF for the frontend");
+        assert_eq!(
+            content, "a\nB\nc\n",
+            "the payload must be LF for the frontend"
+        );
 
         // The frontend adopts that hash as its CAS baseline and the user edits the LF buffer.
         let edited = content.replace("c", "C");
@@ -1200,7 +1203,9 @@ mod tests {
             Some(ExternalChange::Changed { content, hash }) => (content, hash),
             other => panic!("expected Changed, got {other:?}"),
         };
-        store.write(&target, &content.replace("b", "B"), &hash).unwrap();
+        store
+            .write(&target, &content.replace("b", "B"), &hash)
+            .unwrap();
 
         let on_disk = fs::read_to_string(&target).unwrap();
         assert_eq!(on_disk, "a\nB\nc\n");
@@ -1222,7 +1227,9 @@ mod tests {
             other => panic!("expected Changed, got {other:?}"),
         };
         assert_eq!(content, "a\nb\nc\n");
-        store.write(&target, &content.replace("b", "B"), &hash).unwrap();
+        store
+            .write(&target, &content.replace("b", "B"), &hash)
+            .unwrap();
 
         assert_eq!(fs::read_to_string(&target).unwrap(), "a\r\nB\r\nc\r\n");
     }
@@ -1245,7 +1252,9 @@ mod tests {
         };
         assert_ne!(hash, first_hash);
 
-        store.write(&target, &format!("{content}d\n"), &hash).unwrap();
+        store
+            .write(&target, &format!("{content}d\n"), &hash)
+            .unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "a\r\nb\r\nc\r\nd\r\n");
     }
 }
