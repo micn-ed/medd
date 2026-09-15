@@ -99,10 +99,64 @@ describe('autosave debounce (~1s after typing stops)', () => {
     expect(tab?.expectedHash).toBe('h2')
   })
 
+  test("a write's outcome records what was written, not what the buffer holds when it settles", async () => {
+    // performWrite calls markSynced(path, request.content, settledHash) — request.content is
+    // captured when the write is ISSUED, at the top of requestWrite. If markSynced were ever
+    // changed to read the tab's current buffer instead (mutants.sh's "markSynced records the
+    // buffer, not what was written"), lastSyncedText would claim disk holds text that was never
+    // actually sent, for any edit landing after issue but before the write settles.
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    let resolveWrite: (hash: string) => void = () => {}
+    invokeMock.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveWrite = resolve
+      }),
+    )
+    edit('/workspace/a.md', 'X') // -> 'v1X'
+    await vi.advanceTimersByTimeAsync(1000) // the write for 'v1X' is now in flight, unsettled
+
+    edit('/workspace/a.md', 'Y') // -> 'v1XY', typed while that write is still in flight; this
+    // schedules its own fresh debounce timer rather than joining the in-flight write, and it's
+    // deliberately never advanced to firing — the point is what the FIRST write records, not what
+    // happens to a second one.
+
+    resolveWrite!('h2')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const tab = getTab('/workspace/a.md')
+    expect(tab?.lastSyncedText).toBe('v1X') // what the in-flight write actually sent
+    expect(tab?.currentText).toBe('v1XY') // the later edit, still dirty and unsaved
+  })
+
   test('does not fire when the buffer is not dirty', async () => {
     openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
     // No edit — currentText === lastSyncedText already.
     await vi.advanceTimersByTimeAsync(1500)
+    expect(invokeMock).not.toHaveBeenCalled()
+  })
+
+  test('a stale pre-conflict timer, left uncancelled by Reload, still finds nothing dirty to write', async () => {
+    // The debounce timer an edit schedules is never explicitly cancelled by a conflict arriving
+    // or by Reload resolving it — "autosave is suspended while a conflict is pending" (above)
+    // shows the write is blocked while conflict is still set, but that only proves the CONFLICT
+    // guard in requestWrite works. By the time this test's original timer fires, Reload has
+    // already cleared the conflict and made the buffer clean again, so this isolates the other
+    // guard: requestWrite's dirty check is what's actually standing between a stale timer and an
+    // unwanted write once the conflict guard is no longer the one stopping it.
+    openTab('/workspace/a.md', 'v1', 'h1', '/workspace')
+    edit('/workspace/a.md', 'X') // schedules the timer this test is about
+
+    fireBackendEvent('document:changed-on-disk', {
+      path: '/workspace/a.md',
+      content: 'v2 from elsewhere',
+      hash: 'h2',
+    })
+    reload('/workspace/a.md') // clears the conflict; currentText and lastSyncedText both become
+    // 'v2 from elsewhere' — clean. The timer scheduled above is still pending and uncancelled.
+
+    await vi.advanceTimersByTimeAsync(1500) // the stale timer fires well within this window
+
     expect(invokeMock).not.toHaveBeenCalled()
   })
 })
