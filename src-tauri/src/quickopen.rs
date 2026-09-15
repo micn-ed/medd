@@ -584,11 +584,23 @@ mod tests {
 
     #[test]
     fn the_ignore_rule_reaches_the_same_answer_by_every_route() {
-        // AGREEMENT, in the same shape as `the_tree_and_the_walk_agree_...` above and for the same
-        // reason: the specific-case assertions cannot catch the *next* route in, and routes are
-        // what keep getting added. The general statement is route-independent — **adding an alias
-        // to an ignored location must not change what the walk finds** — so it holds for a
-        // symlink, and for whatever mechanism reaches an ignored directory sideways next.
+        // AGREEMENT, in the same shape as `the_tree_and_the_walk_agree_...` above: a DIFFERENTIAL
+        // assertion — **adding an alias to an ignored location must not change what the walk
+        // finds** — rather than an expected-output one. It does not need to know what the right
+        // answer is, only that adding a path to the same content does not change it.
+        //
+        // WHAT THIS DOES AND DOES NOT COVER, because the name promises more than the body keeps.
+        // The generality is in the *form*, not in the mechanism: this body creates a symlink, so
+        // today it catches exactly what `a_symlink_into_an_ignored_directory_is_not_followed` and
+        // its sibling catch — verified by mutation, all three die to the same mutant and no mutant
+        // distinguishes them. It is REDUNDANT, which is not the same as vacuous: drop the
+        // symlink-route guard and it does fail.
+        //
+        // It will hold for a hardlinked directory, a bind mount, or an include mechanism when
+        // someone adds that route *to this test*, and not one moment before. Its job is to make
+        // the next route cheap to cover — two lines here, against a whole new expected-output
+        // assertion in a case test — and to be the named home for the class, not to cover the
+        // next route in advance.
         //
         // The failure it pins (eighth instance of one question answered in two places):
         // `is_ignored_name` checks each entry's own name as the walk descends, which is equivalent
