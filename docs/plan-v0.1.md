@@ -13,24 +13,10 @@ Increments are sequential by default. Where two can genuinely overlap it is note
 
 ## How increments are handed off
 
-Each increment is committed locally, verified, then pushed.
-
-**Authorship and acceptance are separate.** Whoever writes an increment writes its tests too —
-that is how correct code gets written, not a verification step, and in practice it is where
-almost every real defect on this project has been caught: a test written alongside the code, then
-the code deliberately broken to watch the test fail for the right reason. Acceptance is somebody
-else's: an independent pass against the increment's definition of done, adversarial where it can
-be, looking for what the author and the reviewer both missed. Neither substitutes for the other,
-and collapsing them loses the half that finds things.
-
-Two further conventions make this safe when more than one person is working the same checkout:
-
-- **The working tree belongs to whoever is mid-increment.** Reviews, documentation edits, and
-  exploratory work wait for the gap between increments, or happen in a copy outside the repo.
-- **Commit explicit paths, never `git add -A`.** A blanket add sweeps up someone else's
-  uncommitted work in progress, which at best produces a commit whose message does not describe
-  its contents, and at worst loses that work to a later reset. Check `git status` before
-  committing and stage only what you changed.
+Each increment is committed locally, verified independently, then pushed. The working conventions
+that make that safe — separating authorship from acceptance, stating a fix's invariant before
+writing it, and sharing a checkout without losing each other's work — live in
+[conventions.md](conventions.md).
 
 ---
 
