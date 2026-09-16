@@ -576,12 +576,18 @@ the window comes forward, and nothing may assume the window is frontmost after a
 `is_focused()` exists, so the manual pass *asserts* activation in each of the three named states
 with a predicted outcome rather than eyeballing it.
 
-**Implementation status.** `routing.rs` is still a stub in `main`: everything above is settled
-design, corrected against `tao` and `tauri-runtime-wry` before the code was written, not a
-description of shipped behaviour. `RunEvent::Opened`'s *handler* is part of increment 10, but the
-event cannot fire until v0.2 adds `CFBundleDocumentTypes`, so its hook correctness is unverifiable
-in v0.1 — the handler is written, its shaping is testable, and whether the event ever arrives is a
-v0.2 question. Full reasoning in [ADR-003](adr/003-launch-routing.md).
+**What kind of claim this section is.** Everything above is design corrected against `tao`,
+`tauri-runtime-wry` and the single-instance plugin *before* the code was written — the second of the
+three kinds named at the top of this document, not a description of observed behaviour. For where
+it has got to, see [todo.md](todo.md), which owns increment status; this section deliberately does
+not say, because a sentence about what is merged today is a fact with a shelf life, and the first
+draft of this paragraph carried one.
+
+One durable limit belongs here rather than in a status document, because it is a property of the
+platform and not of our progress: **`RunEvent::Opened` cannot fire at all until v0.2 adds
+`CFBundleDocumentTypes`**, so its hook correctness is unverifiable in v0.1. The handler is written
+and its path-shaping is unit-testable; whether the event ever arrives is a v0.2 question. Full
+reasoning in [ADR-003](adr/003-launch-routing.md).
 
 `open:request` handling in the frontend, per path: a directory becomes the workspace; a `.md` file
 under the current root opens as a tab; a `.md` file outside it opens as a loose tab with the tree
