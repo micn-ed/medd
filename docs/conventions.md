@@ -633,8 +633,18 @@ Two things follow:
   link"* is the fact. *"The fraction moved"* is an inference, and a flattering one.
 - **The beneficiary of a generous reading is the right person to check it, and the wrong person to
   rely on for checking it.** On this project the correction has twice come from the person being
-  credited, which is admirable and is not a control. If you are writing the generous reading, that
-  is your job to catch.
+  credited — and examining *why* it worked makes the point stronger, not weaker. **Neither
+  correction came from being alert to flattery. Both came from happening to hold the disconfirming
+  fact**: knowing a table already listed that link as covered, knowing a document had forced a
+  question because you wrote the sentence.
+
+  So the failure mode is not reluctance, it is **coverage**. A generous reading of your own work is
+  precisely the one you are least equipped to notice, because it agrees with what you would hope is
+  true — and what saved it twice was an accident of what someone happened to know. That is not a
+  control with a gap in it; it is not a control.
+
+  If you wrote the generous reading, catching it is yours. The times it worked out the other way
+  are not evidence the other route functions.
 
 ---
 
