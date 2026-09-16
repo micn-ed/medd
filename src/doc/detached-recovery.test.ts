@@ -8,12 +8,17 @@
 // weakening them. Each assertion carries a `← should …` comment saying what it becomes, and they
 // are not all the same edit:
 //
-//   line ~70, ~82   `.detached).toBe(true)`          ->  `.toBe(false)`
-//   line ~93        `expect(invokeMock).not.toHaveBeenCalled()`  ->  `expect(invokeMock).toHaveBeenCalled()`
+//   the two assertions marked `← should be false once fixed`
+//                                     `.detached).toBe(true)`  ->  `.toBe(false)`
+//   the one marked `← should have been called once fixed`
+//                   `expect(invokeMock).not.toHaveBeenCalled()`  ->  drop the `.not`
+//
+// Identified by their marker comments rather than by line number, which drifts the moment anyone
+// edits this file — adding this very paragraph moved all three.
 //
 // The first assertion in the first test (`detached` is `true` immediately after the removal
-// event) is NOT one of them: that behaviour is correct and stays. Then delete this header and the
-// `(OPEN)` from the describe block.
+// event) carries no marker and is NOT part of the fix: that behaviour is correct and stays. Then
+// delete this header and the `(OPEN)` from the describe block.
 //
 // WHY NOT `test.fails()`. It was the obvious choice and it is the wrong one. `test.fails()`
 // passes when the body throws *for any reason whatsoever* — verified: a genuine assertion
