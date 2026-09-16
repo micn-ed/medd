@@ -633,6 +633,25 @@ let the *how* live in one place with a pointer to it.
 This is the shared-predicate rule one level up: **an operational document is a caller, and a caller
 that restates the answer instead of asking for it drifts.**
 
+**Exactly one document owns implementation status.** Status is the thing that changes daily, so
+every document that asserts it is a drift site — and the ones that assert it *in passing*, while
+being about something else, are the ones nobody updates. Here that document is
+[todo.md](todo.md); the architecture describes the design, and says nothing about whether it is
+built yet.
+
+There is a second reason to concentrate it, better than tidiness: **a document that asserts
+implementation status makes someone verify implementation status.** Writing one sentence about
+shipped behaviour here forced the question of whether it was shipped — which is how 360 lines of
+finished work were found to exist only on one machine, unpushed. That check happens because the
+document demands it, not because anyone was being observant, so it is worth having a document whose
+job is to demand it.
+
+**And the test for which document owns a limitation: does it expire when we finish the work?** A
+platform constraint — an event that cannot fire until a bundle declaration exists — belongs in the
+architecture, because it is a fact about the platform and will still be true when everything is
+built. *"This module is still a stub"* belongs in status, because it is false the moment someone
+merges, **while still reading as current**.
+
 ---
 
 ## Sharing a checkout
