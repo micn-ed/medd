@@ -308,6 +308,13 @@ you know** — and the natural next sentence names the source, where a byte coun
 That is the narrow, usable form of *cross-check surprising results*, and it is worth preferring
 because it works without anyone deciding a result was surprising enough to warrant a second look.
 
+**This applies to anything you looked at, not only to things that printed a number.** A screenshot
+is an instrument. *"Entering the detached state removes the dirty dot"* was read off one — a
+reasonable inference from watching one glyph appear and another vanish, and wrong: there had never
+been a dirty dot. Checking the source before writing it up is what caught it. Had the inference
+shipped as an observation, someone would have hunted a regression that did not exist while the real
+gap stayed hidden behind a plausible explanation for the symptom.
+
 **And beware corroboration, which is the strongest signal available and can be supplied by a broken
 instrument.** The claim above had two sources: a valid one, checked separately, and an invalid one
 that returned zero because the command was wrong. **They agreed — and the agreement is what made it
@@ -606,6 +613,28 @@ knowledge is structural, and this project's own answer to it is a shared predica
 and `is_ignored_name` both exist so their question cannot be answered twice. An agreement test
 holds the line until the predicate exists, and should become redundant-but-cheap afterwards rather
 than remaining load-bearing. If it stays load-bearing, the underlying duplication was never fixed.
+
+---
+
+## An honest number degrades one generous reading at a time
+
+A carefully honest figure — *three of four links established* rather than *"it's unverified"* — is
+worth more than either extreme, and it erodes in a way that is hard to notice: **each individual
+over-read is defensible, and the next one starts from where the last landed.**
+
+It happened here. A second, weaker instrument became available on a link that was **already
+established**, and that was reported as the fraction moving. Not absurd — just wrong, and wrong in
+the direction that makes the number look better. The next reading would have started from the
+improved figure.
+
+Two things follow:
+
+- **Report what changed, not what it feels like.** *"A second instrument on an already-covered
+  link"* is the fact. *"The fraction moved"* is an inference, and a flattering one.
+- **The beneficiary of a generous reading is the right person to check it, and the wrong person to
+  rely on for checking it.** On this project the correction has twice come from the person being
+  credited, which is admirable and is not a control. If you are writing the generous reading, that
+  is your job to catch.
 
 ---
 
