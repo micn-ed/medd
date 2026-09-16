@@ -210,9 +210,19 @@ more accurate and it names what is left.
 | `document_write` → bytes on a real file | Rust composition tests driving `QuitCoordinator` and `DocumentStore` against a real temp file |
 
 **Unverified: the join of the two ends** — a real keystroke, in a real WKWebView, on a document
-dirtied by real typing. The harness cannot reach it (no backend, never writes to disk, nothing can
-emit `app:before-quit`). Increment 10's CLI closes it, because `medd fixture.md` leaves the editor
-focused and every step after is keyboard-only.
+dirtied by real typing.
+
+The harness reaches **one end of the middle** and no further: since `eventMock.ts` retains
+handlers it can fire `app:before-quit` into the frontend's own listener, so link 3 has a second
+instrument on it. That is Blink rather than WKWebView and appearance rather than bytes — a weaker
+instrument on a link already established, not movement in the fraction. `tauriMock.ts` still never
+writes to disk, so the last link stays out of reach. Increment 10's CLI closes the gap, because
+`medd fixture.md` leaves the editor focused and every step after is keyboard-only.
+
+*(This paragraph said "nothing can emit `app:before-quit`" for a while after §2's identical claim
+was corrected — the same sentence, fixed in one place and left standing in another. Recorded
+because it is the smallest possible version of fixing the instance and missing the class, and it
+happened inside a single file.)*
 
 **When that script is written, the timing constraint is the whole test.** The autosave debounce is
 1000ms, so an ordinary autosave writes the keystroke to disk one second later with no quit
