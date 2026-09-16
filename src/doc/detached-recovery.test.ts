@@ -2,8 +2,18 @@
 //
 // These assert what medd does today, which is not what it should do. They are green, and they go
 // red the moment the defect is fixed. That is deliberate and it is the whole point: the fix
-// becomes a visible, mechanical diff (flip three `true`s to `false`s and delete this header)
-// rather than something that could land unnoticed.
+// becomes a visible, mechanical diff rather than something that could land unnoticed.
+//
+// WHEN THESE GO RED, THAT IS THE FIX LANDING — not a regression. Do not make them pass by
+// weakening them. Each assertion carries a `← should …` comment saying what it becomes, and they
+// are not all the same edit:
+//
+//   line ~70, ~82   `.detached).toBe(true)`          ->  `.toBe(false)`
+//   line ~93        `expect(invokeMock).not.toHaveBeenCalled()`  ->  `expect(invokeMock).toHaveBeenCalled()`
+//
+// The first assertion in the first test (`detached` is `true` immediately after the removal
+// event) is NOT one of them: that behaviour is correct and stays. Then delete this header and the
+// `(OPEN)` from the describe block.
 //
 // WHY NOT `test.fails()`. It was the obvious choice and it is the wrong one. `test.fails()`
 // passes when the body throws *for any reason whatsoever* — verified: a genuine assertion
