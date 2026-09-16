@@ -287,3 +287,108 @@ pub fn open_external(app: AppHandle, url: String) -> Result<(), MeddError> {
 pub fn quit_ready(coordinator: State<'_, QuitCoordinator>) {
     coordinator.signal_ready();
 }
+
+#[cfg(test)]
+mod command_shape {
+    //! A source-level check, because the property it guards has no runtime observable.
+    //!
+    //! The folder picker deadlocked every copy of medd on every click: `workspace_pick` was a
+    //! plain `#[tauri::command]`, so it ran inline on the thread dispatching the IPC message --
+    //! the main thread -- and `blocking_pick_folder` then waited *there* for a panel that needs
+    //! the main run loop in order to appear. The app waited for itself.
+    //!
+    //! No test we have or could write catches that: it is a deadlock between a dependency and the
+    //! platform event loop, invisible to unit tests, to the browser harness, and to mutation. So
+    //! the class is made structurally detectable instead of behaviourally testable -- the same
+    //! move as requiring an owned root in a signature rather than trusting a call site: when a
+    //! requirement has no observable, check whether it is really a constraint on *capability*,
+    //! and if it is, enforce the shape.
+    //!
+    //! The rule: **a command whose body calls a `blocking_*` platform API must be declared
+    //! `#[tauri::command(async)]`.** Async commands run on the threadpool, where blocking is safe;
+    //! plain ones run on the main thread, where it is a deadlock.
+    //!
+    //! This reads its own source deliberately. The attribute is erased by the macro, so there is
+    //! nothing left at runtime to assert against.
+
+    /// The command surface only -- everything before this test module. `include_str!` pulls in
+    /// this module too, and its own prose contains both `#[tauri::command(async)]` and
+    /// `blocking_*`, which the scan happily matched as real code. Caught because the check was
+    /// run against known-GOOD source first: run only against the broken version, a
+    /// self-referencing scan reports the offender it was written for and looks correct.
+    fn source() -> &'static str {
+        const FULL: &str = include_str!("commands.rs");
+        match FULL.find("\n#[cfg(test)]") {
+            Some(i) => &FULL[..i],
+            None => FULL,
+        }
+    }
+
+    /// Every `#[tauri::command...]` in this file, as (attribute line, function name, body).
+    fn commands() -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        // Line-start only: a real attribute sits at column 0, a mention inside a doc comment
+        // does not.
+        let marker = "\n#[tauri::command";
+        let mut rest = source();
+        while let Some(i) = rest.find(marker) {
+            rest = &rest[i..];
+            // `rest` begins with the marker's own leading newline; skip it before looking for
+            // the end of the attribute line, or the attribute comes out empty and every command
+            // reads as "not async".
+            let line = &rest[1..];
+            let attr_end = line.find('\n').unwrap_or(line.len());
+            let attr = line[..attr_end].to_string();
+            let after = &line[attr_end..];
+            let name = after
+                .split_once("fn ")
+                .and_then(|(_, t)| t.split(|c: char| !c.is_alphanumeric() && c != '_').next())
+                .unwrap_or("<unknown>")
+                .to_string();
+            // Body: up to the next command attribute, or end of file.
+            let body_end = after[1..].find(marker).map(|j| j + 1).unwrap_or(after.len());
+            out.push((attr, name, after[..body_end].to_string()));
+            rest = &after[body_end..];
+            if rest.is_empty() {
+                break;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_command_that_blocks_on_the_platform_is_declared_async() {
+        let offenders: Vec<String> = commands()
+            .into_iter()
+            .filter(|(_, _, body)| body.contains("blocking_"))
+            .filter(|(attr, _, _)| !attr.contains("(async)"))
+            .map(|(_, name, _)| name)
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "these commands call a blocking platform API from the main thread and will deadlock \
+             the app: {offenders:?}. Declare them #[tauri::command(async)] so they run on the \
+             threadpool. This is the folder-picker bug; it has no runtime test."
+        );
+    }
+
+    #[test]
+    fn the_check_can_actually_fail() {
+        // Guards the guard. If `commands()` ever stops finding commands -- a parser change, a
+        // reformat, a move to another file -- the test above passes by finding nothing, which is
+        // the failure mode it exists to prevent. An empty list is not a clean bill of health.
+        let found = commands();
+        assert!(
+            found.len() >= 5,
+            "expected to find the command surface; found {} -- the scan is broken, and a broken \
+             scan reports no offenders",
+            found.len()
+        );
+        assert!(
+            found.iter().any(|(_, name, _)| name == "workspace_pick"),
+            "workspace_pick is the command this check exists for and it was not found: {:?}",
+            found.iter().map(|(_, n, _)| n).collect::<Vec<_>>()
+        );
+    }
+}
