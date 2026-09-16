@@ -299,6 +299,27 @@ The fix is then a mechanical diff.
 
 ---
 
+## Report the claim, not the instrument reading
+
+*"`wc -c` returned 0 bytes"* invites trust. *"`routing.rs` on `main` is a stub"* invites **how do
+you know** — and the natural next sentence names the source, where a byte count of zero for a
+68-byte file does not survive being written down beside it.
+
+That is the narrow, usable form of *cross-check surprising results*, and it is worth preferring
+because it works without anyone deciding a result was surprising enough to warrant a second look.
+
+**And beware corroboration, which is the strongest signal available and can be supplied by a broken
+instrument.** The claim above had two sources: a valid one, checked separately, and an invalid one
+that returned zero because the command was wrong. **They agreed — and the agreement is what made it
+confident enough to pass on.** They agreed by coincidence: the broken instrument failed in a
+direction that happened to match. Two independent sources concurring is exactly what you would tell
+someone else to look for, so this failure arrives wearing the signature of good practice.
+
+(The conclusion was right anyway — the module *was* a stub — which is worse rather than better: an
+outcome that vindicates a broken method is how the method survives.)
+
+---
+
 ## Put the honest account in the artifact, not in the transmission
 
 A report can be accurate while the thing it reports on overclaims, because they are **different
@@ -598,6 +619,23 @@ reporting one from every site there is.
 So: state the scope of the search alongside the result. *"Only these two functions take both locks,
 and both take them in the same order"* is a different claim from *"the two I looked at agreed"*,
 and only the first licenses anyone to stop worrying.
+
+---
+
+## The write-ups are where the checking happens
+
+Four times on this project, someone broke a convention **while actively applying it** — and every
+one was caught by the person who broke it. That is not diligence, and treating it as diligence
+would miss the mechanism: in all four cases it was caught while **writing about the rule**, not
+while using it.
+
+Explaining a rule to someone else puts your own work beside it in a way that applying the rule does
+not. You cannot write *"a document that restates a mechanism goes stale invisibly"* without your
+eye landing on the mechanism you restated three paragraphs earlier.
+
+So the review write-ups here are **load-bearing rather than overhead.** They look like
+documentation of work already done; they are in fact where a large share of the checking actually
+happens, and a process that trimmed them as ceremony would lose the catching along with the prose.
 
 ---
 
