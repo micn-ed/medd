@@ -158,6 +158,19 @@ the workspace model is single-root (D-4).
 
 **Cost.** No window-per-workspace. Quitting loses in-memory state unless it has been persisted.
 
+**Amendment (2026-09-16): "one process" cannot be fully guaranteed, and this decision should say
+so on its face.** The single-instance mechanism medd relies on unlinks its lock path and *then*
+binds, so two launches landing inside that window both unlink and both bind — two primaries, two
+windows, with the first listener orphaned on an unlinked inode and permanently unreachable. I-1 is
+a **Must** and this is the one case it does not hold.
+
+Vanishingly unlikely in single-user desktop use, and not fixable at medd's layer without replacing
+the mechanism. It is recorded in the README's known limitations and argued in
+[adr/003-launch-routing.md](adr/003-launch-routing.md) — but **this is where someone reasoning about
+the process model will look**, and a locked decision whose stated property is known unachievable
+should carry the exception rather than leave it to be discovered two documents away. The decision
+itself is unchanged; only its claim is now honest.
+
 ---
 
 ## D-8 — Image support: **basic rendering only**
@@ -295,6 +308,17 @@ workspace because someone double-clicked a file in `~/Downloads` would throw awa
 tabs they were working with — a large, surprising side effect from a small action. A loose tab is
 the least destructive reading of the request, and the tab's title bar can show the outside-workspace
 path so the user is not confused about what they are editing.
+
+**Ordering dependency (2026-09-16): the re-rooting must happen *before* the document is read, or
+P-3 silently fails for that document.** External-change detection for a loose file is attached only
+when a workspace is open — so a loose document opened with no workspace gets no watch and no
+detection at all. P-3 is a **Must**.
+
+This is unreachable today, because the file tree is the only way to open anything and it requires a
+workspace. It stays unreachable *only if* the second clause above — the file's parent directory
+becomes the workspace — is applied before the read. A launch path that routes and opens first would
+break a Must without anything failing. An ordering dependency rather than a divergence, and
+cheapest to state before the CLI lands.
 
 **Cost.** Relative links and images inside a loose file resolve against *that file's* directory,
 not the workspace root — which is correct, but means link resolution cannot assume every open
