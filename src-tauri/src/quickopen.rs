@@ -634,3 +634,37 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod wire_format {
+    //! Contract tests: the shape Rust actually puts on the wire, asserted against what the
+    //! frontend reads. This is the only place that contract can be tested.
+    //!
+    //! The frontend's own tests — and `harness/tauriMock.ts` — construct these payloads by hand,
+    //! so they assert that the frontend agrees with itself. That is how
+    //! `{{kind:"conflict", current_content}}` shipped against six green tests all mocking
+    //! `{{kind:"Conflict", currentContent}}`: a mock at a boundary *defines* the boundary for
+    //! every test that uses it, and the number of green tests over it measures exposure rather
+    //! than coverage.
+    //!
+    //! String comparisons, deliberately, as in `error.rs`: the failure mode is a *name*, and an
+    //! assertion built from the same type cannot see a renaming.
+    use super::*;
+
+    /// `relative_path` becomes `relativePath` under `rename_all = "camelCase"`, which is what
+    /// `src/quickopen/match.ts` reads. Its own tests build entries by hand, so they cannot see a
+    /// disagreement here.
+    #[test]
+    fn quick_open_entry_fields_are_what_match_ts_reads() {
+        let e = QuickOpenEntry {
+            path: std::path::PathBuf::from("/w/notes/a.md"),
+            relative_path: "notes/a.md".to_string(),
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(
+            json.contains(r#""relativePath":"notes/a.md""#),
+            "match.ts reads entry.relativePath: {json}"
+        );
+        assert!(json.contains(r#""path":"#), "match.ts reads entry.path: {json}");
+    }
+}

@@ -392,3 +392,32 @@ mod command_shape {
         );
     }
 }
+
+#[cfg(test)]
+mod wire_format {
+    //! Contract tests — see `error.rs`'s `wire_format` for why these assert exact strings and why
+    //! the frontend's own tests cannot establish this. These four have single-word fields, so
+    //! `camelCase` is currently the identity function: they are safe by accident of vocabulary
+    //! rather than by design, and a field renamed to two words would break silently.
+    use super::*;
+
+    #[test]
+    fn workspace_info_fields_are_what_app_svelte_reads() {
+        let json = serde_json::to_string(&WorkspaceInfo {
+            root: PathBuf::from("/w"),
+            name: "w".to_string(),
+        })
+        .unwrap();
+        assert!(json.contains(r#""root":"#) && json.contains(r#""name":"#), "{json}");
+    }
+
+    #[test]
+    fn read_result_fields_are_what_app_svelte_reads() {
+        let json = serde_json::to_string(&ReadResult {
+            content: "x".to_string(),
+            hash: crate::document::ContentHash::of(b"x"),
+        })
+        .unwrap();
+        assert!(json.contains(r#""content":"x""#) && json.contains(r#""hash":"#), "{json}");
+    }
+}

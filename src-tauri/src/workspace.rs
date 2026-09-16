@@ -623,3 +623,57 @@ mod tests {
         assert!(matches!(result, Err(MeddError::OutsideWorkspace { .. })));
     }
 }
+
+#[cfg(test)]
+mod wire_format {
+    //! Contract tests: the shape Rust actually puts on the wire, asserted against what the
+    //! frontend reads. This is the only place that contract can be tested.
+    //!
+    //! The frontend's own tests — and `harness/tauriMock.ts` — construct these payloads by hand,
+    //! so they assert that the frontend agrees with itself. That is how
+    //! `{{kind:"conflict", current_content}}` shipped against six green tests all mocking
+    //! `{{kind:"Conflict", currentContent}}`: a mock at a boundary *defines* the boundary for
+    //! every test that uses it, and the number of green tests over it measures exposure rather
+    //! than coverage.
+    //!
+    //! String comparisons, deliberately, as in `error.rs`: the failure mode is a *name*, and an
+    //! assertion built from the same type cannot see a renaming.
+    use super::*;
+
+    /// `EntryKind` carries `rename_all = "camelCase"` on an **enum**, which renames the
+    /// *variants* — the identical mechanism to the `MeddError` wire bug, one type over. It works
+    /// only because `src/tree/index.ts` declares `'directory' | 'markdown' | 'other'` by hand and
+    /// happens to match what serde emits. Change or drop that attribute and every entry arrives
+    /// with a kind the tree compares against and never matches: nothing is clickable, nothing is
+    /// expandable, no error anywhere, and every existing test still green.
+    #[test]
+    fn entry_kind_variants_are_what_the_tree_compares_against() {
+        for (kind, expected) in [
+            (EntryKind::Directory, r#""directory""#),
+            (EntryKind::Markdown, r#""markdown""#),
+            (EntryKind::Other, r#""other""#),
+        ] {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(
+                json, expected,
+                "src/tree/Tree.svelte compares entry.kind against {expected}: got {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn tree_entry_fields_are_what_the_tree_reads() {
+        let e = TreeEntry {
+            name: "note.md".to_string(),
+            path: std::path::PathBuf::from("/w/note.md"),
+            kind: EntryKind::Markdown,
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        for field in [r#""name":"#, r#""path":"#, r#""kind":"#] {
+            assert!(
+                json.contains(field),
+                "src/tree/index.ts's TreeEntry reads {field} got {json}"
+            );
+        }
+    }
+}

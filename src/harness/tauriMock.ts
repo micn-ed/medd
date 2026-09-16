@@ -15,6 +15,22 @@
 // to this file (and '@tauri-apps/api/event' to eventMock.ts, for the same reason but a different
 // import path — see that file's header). Nothing here is reachable from a production build.
 
+// THE SHAPES BELOW ARE A COPY OF A CONTRACT THIS FILE DOES NOT OWN. Every payload here is
+// hand-constructed to match what Rust serialises — `TreeEntry`/`EntryKind`, `ReadResult`,
+// `WorkspaceInfo`, `QuickOpenEntry`, the watcher payloads, `MeddError`. Nothing in the frontend
+// checks them against the real thing, and nothing can: a mock at a boundary *defines* that
+// boundary for every test that uses it, so agreement here is agreement with itself.
+//
+// That is not hypothetical. `{kind: "conflict", current_content}` shipped against six green tests
+// all mocking `{kind: "Conflict", currentContent}`, and every compare-and-swap rejection missed
+// `isConflictError` in production — increment 7's own named blocker case, dead, with the suite
+// green. The number of tests over a mocked boundary measures exposure, not coverage.
+//
+// The contract is owned by the `wire_format` test modules in `src-tauri/src/` — error.rs,
+// workspace.rs, quickopen.rs, commands.rs, watcher.rs. They assert the exact bytes Rust emits
+// against what the frontend reads. If you change a shape here, change it there, and let that test
+// fail first: it is the only place the disagreement is visible.
+
 import { DIRS, FILES, ROOT } from './fixture'
 
 function hashOf(content: string): string {
