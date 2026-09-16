@@ -32,7 +32,19 @@ pub struct ReadResult {
 }
 
 /// Native folder picker (D-14). `None` if the user cancels.
-#[tauri::command]
+///
+/// **`async` is load-bearing, not decoration.** A plain `#[tauri::command]` is
+/// `ExecutionContext::Blocking`, which runs the handler inline on the thread dispatching the IPC
+/// message — the main thread. `blocking_pick_folder` then waits there for a panel that needs the
+/// main run loop to pump in order to appear, so the app deadlocks the moment the user clicks
+/// *Open Folder…* and never recovers. The plugin documents exactly this: its non-blocking
+/// `pick_folder` "should be used when running on the main thread to avoid deadlocks with the event
+/// loop", and the blocking variant is "for use in other contexts". `async` makes this one of those
+/// other contexts by moving it to the threadpool, leaving the main thread free to run the panel.
+///
+/// This takes no locks, so it is safe under the concurrency that `async` admits (architecture.md
+/// §2: no lock is held across a filesystem or OS call).
+#[tauri::command(async)]
 pub fn workspace_pick(app: tauri::AppHandle) -> Option<PathBuf> {
     let file_path = app.dialog().file().blocking_pick_folder()?;
     file_path.into_path().ok()
