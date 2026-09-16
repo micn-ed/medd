@@ -421,3 +421,34 @@ mod wire_format {
         assert!(json.contains(r#""content":"x""#) && json.contains(r#""hash":"#), "{json}");
     }
 }
+
+#[cfg(test)]
+mod ipc_probe {
+    //! PROBE — what can a Rust test actually reach above the IPC boundary?
+    use super::*;
+    use tauri::Manager;
+
+    #[test]
+    fn a_command_runs_against_real_tauri_state_and_its_effect_is_observable() {
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![quit_ready])
+            .manage(crate::quit::QuitCoordinator::new())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app builds");
+
+        // A real `State<'_, QuitCoordinator>`, from a real app handle.
+        let coordinator = app.state::<crate::quit::QuitCoordinator>();
+        let rx = coordinator
+            .decide()
+            .start_flush
+            .expect("first decision starts the flush");
+
+        // Call the command itself, with the Tauri type it takes in production.
+        quit_ready(app.state::<crate::quit::QuitCoordinator>());
+
+        assert!(
+            crate::quit::wait_for_quit_signal(&rx, std::time::Duration::from_secs(1)),
+            "quit_ready should have signalled the coordinator it was given"
+        );
+    }
+}

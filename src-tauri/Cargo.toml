@@ -25,4 +25,5 @@ notify = "8"
 notify-debouncer-full = "0.7"
 
 [dev-dependencies]
+tauri = { version = "2", features = ["test"] }
 tempfile = "3"
