@@ -86,9 +86,23 @@ growth catches leaks, the absolute catches a design that was never within budget
 allocation churn, which is where retention lives. The soak needs the activity the product
 actually sees:
 
-- **Procedure:** a scripted loop over the eight hours — switch tabs, type and let autosave fire,
-  trigger external changes (a background `git checkout` or a loop touching files), open and close
-  documents. I-3 names *"many opened tabs"* as its own concern, so **tab churn is a separate run**:
+- **Procedure — and the eight hours are the part to drop.** Asking the reachability question of
+  this one first: **nobody here can run an eight-hour soak.** No session persists that long, and
+  nothing can babysit it. If that is the criterion, the criterion is aspirational.
+
+  It is also weaker than it looks. Eight hours of an *idle* app performs almost no operations, and
+  a leak is per-operation — so ten minutes of churn exercises more of the failure than eight hours
+  of sitting still. The 8h figure is a proxy for N-1's *"no growth over a multi-day session"*, and
+  the question underneath it is **does resident memory grow with activity**, which is a slope
+  rather than an endpoint.
+
+  So measure the slope against **cycle count**, not wall time, and it becomes both reachable and
+  sharper: 200 tab open/close cycles, ~5,000 autosaves (drive the debounce directly), ~5,000
+  watcher events (a loop touching files in the workspace). Record resident every N cycles and fit
+  a line. Minutes, not hours, and it isolates *which* operation leaks rather than reporting that
+  something did.
+
+  The eight-hour run survives as an occasional hand-run confidence check, not as the gate. Activity over that run: switch tabs, type and let autosave fire, trigger external changes. I-3 names *"many opened tabs"* as its own concern, so **tab churn is a separate run**:
   open and close 200 documents in sequence and confirm resident returns to within 10% of where it
   started. That is the one that catches a retained `EditorState`, and the ten-tab hold cannot.
 
@@ -142,7 +156,25 @@ the large-document thresholds are measured"* inherits an empty one, since those 
 
 Not currently in §12, and it has the cheapest and most durable number of the five.
 
-**Measured on medd's own repository, now:**
+**"medd's own repository" is three different workspaces, and that is why this number did not
+exist yet.** Measured just now, same repo, same commit:
+
+```
+dev's fresh worktree (no npm install, no cargo build)        ~18 files
+this worktree (target/ present, node_modules absent)      14,502 files
+the shared checkout (both present)                        42,553 files
+```
+
+The ignore predicate's effect therefore ranges from **1× to 345×** depending on invisible local
+state. Dev measured 18 files and correctly declined to manufacture a bigger tree — and the bigger
+tree existed one directory away. The requirement named a *repository* when it needed to name a
+*state*, which is a requirement a careful person can satisfy while measuring the wrong thing.
+
+So specify by contents, not by name. **The workspace is a checkout with `node_modules` and
+`target` present** — which is what a developer's working copy looks like, and what D-4's premise
+actually describes.
+
+**Measured on that:**
 
 ```
 enumerated with dotfiles hidden only         42,389 files
@@ -152,9 +184,11 @@ walk wall time, warm cache                 0.58s -> 0.25s
 ```
 
 - **Observable:** files enumerated, `.md` files indexed, and wall time to a complete index.
-- **Procedure:** medd's own repository is the realistic workspace — a Rust-plus-Node project is
-  exactly D-4's premise, not an adversarial case. Run warm and cold (`sync` then a cold cache, or
-  a directory not touched since boot); report both, because a first Cmd+P after launch is cold.
+- **Procedure:** a checkout with `node_modules` and `target` populated — not a fresh worktree,
+  which has neither and makes the predicate a no-op. Record the three counts above alongside the
+  result so anyone re-measuring can tell which of the three states they are in; a bare "42,389"
+  with no note about build artefacts is the same trap one layer down. Run warm and cold (a
+  directory untouched since boot); report both, because a first Cmd+P after launch is cold.
 - **Pass:** complete index **within 200 ms warm**, and the enumerated count within a small factor
   of the `.md` count. The 200 ms is a judgement, labelled as one: it is the point at which a user
   who presses Cmd+P and immediately types would see the list settle under their first keystroke.
@@ -182,6 +216,27 @@ Briefly, because each is small and none needs a section:
 - **The `.medd-*.tmp` sweep has no measurement, and should keep none.** Its cost is one `read_dir`
   per directory per session, bounded by construction. Recording that it is deliberately unmeasured
   is worth more than a number here.
+
+---
+
+## Failure is an outcome, and one of its forms is pre-authorised
+
+Each item above says what a failure means, but one option needs stating once, at the top level,
+because it is the one that gets avoided under end-of-increment pressure:
+
+> **"Document the limitation" is a legitimate result for any measurement here, decided in advance
+> rather than conceded at the end.**
+
+It is already the right answer twice over in this project — activation's three window states, and
+the window-close ordering that has no test and cannot have one. Neither is a failure to measure;
+both are measurements that came back saying *this is a property of the platform, not of medd*.
+
+What makes pre-authorising it matter is the alternative. A measurement that comes back badly at the
+end of the last increment, with no sanctioned way to say so, gets resolved by moving the threshold
+to wherever the number landed — which is the *worst* of the three outcomes, because it produces a
+document that looks measured and asserts nothing. A constant changed for a reason is fine. A
+constant changed to match its own measurement is the failure this whole document exists to prevent,
+arriving at the one moment nobody has time to notice.
 
 ---
 
