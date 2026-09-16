@@ -153,6 +153,28 @@ green, which is worse than a failure because nobody investigates a pass.
 
 ---
 
+## A rule about a class is guidance for new members and an audit of existing ones
+
+Only the first happens by default. A constraint discovered while designing something new reads as a
+constraint *on that new thing* — and the members that already exist, in the same class, are never
+revisited.
+
+That is how medd shipped a folder picker that deadlocked the app. The mechanism — *synchronous
+commands run on the main thread* — was written up on this project while analysing a command that
+did not yet exist. The already-shipped command in the same class was never checked against it.
+
+**The actionable form: a write-up that discovers a constraint should enumerate the existing members
+and state whether each complies.** Not *"commands default to blocking"* but *"…and of the seven
+that exist, these two call blocking APIs."*
+
+**And: an observation you attribute to your own tooling is still an observation.** The same deadlock
+was *seen* — the app hung, it was written off as flaky automation, and the note stayed private. A
+plausible local explanation is cheap, usually right, and terminates the search; that is a good prior
+doing its job, not carelessness. The failure was that the observation never reached a surface where
+someone holding the other half could meet it. Recording it costs one line.
+
+---
+
 ## "I couldn't test this" is usually a finding about the code, not a limitation of the tester
 
 When something resists testing, the first question is not how to reach it but **why it is out of
@@ -178,6 +200,24 @@ constructing the scaffolding that exists only because the code is shaped wrong, 
 defect is still there and now has a test propping it up. The second gets the code fixed and the
 harness never needs to exist. The weaker phrasing isn't merely less useful; it is actively
 expensive.
+
+---
+
+## Run a new detector against known-good source, not only known-bad
+
+A detector written for a specific bug will be run against the bug. That proves it can fire; it does
+not prove it fires *for the right reason*. Run it against source you know is clean, and check it
+stays quiet.
+
+It matters because a false positive here is invisible in the direction you are looking. A
+source-scanning check written on this project matched its own explanatory comments — the test
+module's prose contained both patterns it was scanning for — and reported an offender against
+**already-fixed** code. Run only against the buggy version, it would have named exactly the command
+it was written for and looked correct.
+
+**And guard the guard.** If the scan stops finding candidates at all, the check passes by finding
+no offenders among none — precisely the failure it exists to prevent. An empty result is not a
+clean bill of health, so assert that the scan found something to examine.
 
 ---
 
@@ -319,6 +359,31 @@ Two things to do with it:
 - **When a criterion covers only part of the question, split it and name the uncovered part.**
   *Shaping is unit-verified; hook choice is gesture-verified, and one gesture is deferred* is
   honest. A single claim covering both retires the half nobody can check.
+
+## A mock at a boundary makes that boundary unfalsifiable
+
+A mock *defines* the boundary for every test that uses it. Tests on either side can then only
+discover disagreement **within** that side — and a contract between two systems can only be tested
+by something that reads from one and asserts against the other's expectation, which a mock is
+definitionally not.
+
+**The dangerous part is that tests over a mocked boundary amplify the assumption rather than check
+it.** When medd's error wire format turned out to be wrong in both halves at once, six green tests
+across four suites were not six pieces of evidence — they were six places that had adopted the same
+wrong shape. The count read as confidence and was actually exposure. That inverts the usual
+heuristic: **more tests over a mocked boundary means it is less likely anyone looks, not more
+likely it is right.**
+
+So: pin the contract on the side that can fail, with an assertion built from the *literal* wire
+text rather than from the type. An assertion constructed from the same enum cannot see a renaming —
+which is what the failure was. And have the other side point at those tests as the contract's owner
+rather than restating the shape.
+
+**Audit the whole boundary once, not the instance you found.** Seven types cross medd's; one is
+pinned, and the other six are correct *by accident of vocabulary* — their fields are single words,
+so camelCase happens to be the identity function. That is not the same as being right.
+
+---
 
 ## A mock of a dependency cannot testify about that dependency
 
