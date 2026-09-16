@@ -670,6 +670,16 @@ everyone downstream read it as a limitation; limitations get accepted where omis
 **So audit claims of impossibility more often than claims of incompleteness.** The first kind is
 self-correcting and the second is self-sustaining.
 
+**And an impossibility claim in a *verification* document is self-sealing twice over:** it tells
+the reader not to try, and it is written by the person whose job is to know. Nobody audits the
+auditor's account of what cannot be audited.
+
+So in any document whose purpose is to say what is and isn't established, **every "cannot" carries
+what was actually attempted.** That is what lets the next reader tell a tested limit from an
+assumed one. Two claims here went unchallenged for five increments and until someone typed one
+command respectively — *"there is no real backend here"* and *"structurally cannot"* — and both
+were omissions wearing the costume of constraints.
+
 ---
 
 ## A negative claim is only worth its search
