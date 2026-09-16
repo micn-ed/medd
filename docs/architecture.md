@@ -179,6 +179,23 @@ And note that on **edition 2021 an `if let` scrutinee temporary lives for the wh
 is why one of those guards is held at all. Edition 2024 changes that, so an edition bump would
 silently fix this *and* silently change anything else relying on scrutinee temporary lifetimes.
 
+**`commands.rs` is testable, and that does not soften this rule.** Tauri ships a `test` feature —
+`mock_builder()` with `mock_context(noop_assets())` builds a real app inside a test, `app.state()`
+hands out a real `State<'_, T>`, and a command can be called with the Tauri types it takes in
+production and its effect asserted. It is a **dev-dependency only**, verified absent from the
+normal dependency graph, so nothing reaches the shipped binary.
+
+An earlier version of the verification notes said Rust tests *"structurally cannot"* reach above
+the IPC boundary. That was a belief, not a constraint — and it held long enough to shape an
+argument: the recommendation to extract the lock work was partly justified by the availability test
+having "nowhere to run", which was false. **The extraction ruling stands on its own stronger
+reason:** a function never given a guard cannot hold one, and impossible beats true-today.
+
+The rule above is unaffected and must not be read as relaxed. *A shell contains no decisions* was
+never justified by the shell being unreachable — it is justified by decisions belonging where they
+can be reasoned about and exercised directly. **Being able to test a shell is not a licence to put
+decisions in one.**
+
 **Violations cluster here for a structural reason, not by accident**, and knowing why predicts
 where the next one will be: **the shell is the only place with access to everything at once** — the
 handle, the managed state, the request — so it is exactly where it is most convenient to do work
