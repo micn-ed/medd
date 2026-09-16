@@ -161,15 +161,35 @@ impl DocumentStore {
 
         let current_bytes = fs::read(&canonical).map_err(|e| MeddError::io(&canonical, e))?;
         let current_hash = ContentHash::of(&current_bytes);
-        let current_raw = String::from_utf8_lossy(&current_bytes);
+
+        // Decoded strictly, exactly as `read()` does. **No path may hand the frontend content
+        // that `read()` would have refused** — that one rule is the whole of carried finding 6,
+        // and it had two doors. This is the second: a rejected compare-and-swap used to lossily
+        // convert the disk bytes into the `Conflict` payload, the frontend's "Reload" adopted
+        // them, and the next keystroke wrote replacement characters over the file's real content
+        // with a compare-and-swap that passed, because the hash is of the raw bytes and the raw
+        // bytes had not changed.
+        //
+        // A failure here is provably the changed-externally case, which is why it is not a
+        // `Conflict`: the hash the frontend holds came from a `read()` or a previous `write()`,
+        // and both only ever see valid UTF-8, so bytes that still hash to `expected_hash` are
+        // still valid. Non-UTF-8 therefore means the file was replaced by something medd cannot
+        // represent — and there is no second version to offer the user a choice between, so
+        // offering one would be a lie. It also means `detect_line_ending` below only ever runs on
+        // valid UTF-8, which is what closes the UTF-16LE detection hole recorded with this
+        // finding.
+        let Ok(current_raw) = std::str::from_utf8(&current_bytes) else {
+            return Err(MeddError::NotUtf8 { path: canonical });
+        };
+
         if current_hash != *expected_hash {
             return Err(MeddError::Conflict {
-                current_content: normalize_to_lf(&current_raw),
+                current_content: normalize_to_lf(current_raw),
                 hash: current_hash,
             });
         }
 
-        let line_ending = detect_line_ending(&current_raw);
+        let line_ending = detect_line_ending(current_raw);
         let disk_content = restore_line_ending(content, line_ending);
 
         // `Fail`, not `Create`: reaching here means the compare-and-swap above just re-read this
@@ -224,14 +244,24 @@ impl DocumentStore {
                 if current_hash == known_hash {
                     None // our own write, echoing back — the common case, and it must be cheap
                 } else {
-                    // Lossy on invalid UTF-8, same as before finding 1 (increment-7 review finding
-                    // 6, not addressed here) — but `normalize_to_lf` only ever sees the *result*
-                    // of that conversion, which is always valid UTF-8 regardless of how lossy it
-                    // was, so it's safe to run unconditionally.
-                    let raw = String::from_utf8_lossy(&bytes).into_owned();
+                    // The first of carried finding 6's two doors. Decoded strictly, as `read()`
+                    // does: emit nothing rather than push lossy content into a buffer the user
+                    // will then autosave back over the real bytes.
+                    //
+                    // And **`last_known` is deliberately left at its old hash.** Advancing it
+                    // would mean medd had recorded seeing this content while telling the frontend
+                    // nothing, so the next autosave's compare-and-swap would pass and overwrite
+                    // it. Leaving it stale is what makes this degrade into the conflict path that
+                    // already exists: the next write finds a hash mismatch and is refused. The
+                    // cost is that every subsequent watcher event for this path re-reads and
+                    // re-drops it — bounded, because a binary file sitting on disk generates no
+                    // events.
+                    let Ok(raw) = std::str::from_utf8(&bytes) else {
+                        return None;
+                    };
                     last_known.insert(key, current_hash.clone());
                     Some(ExternalChange::Changed {
-                        content: normalize_to_lf(&raw),
+                        content: normalize_to_lf(raw),
                         hash: current_hash,
                     })
                 }
@@ -475,6 +505,71 @@ mod tests {
         let (content2, hash2) = store.read(&target).unwrap();
         assert_eq!(content2, "v2");
         assert_eq!(hash2, written_hash);
+    }
+
+    // --- carried finding 6: no path hands the frontend content `read()` would refuse -------
+
+    #[test]
+    fn a_cas_write_against_non_utf8_disk_content_is_not_a_conflict() {
+        // Door two. This used to return `Conflict` carrying `from_utf8_lossy` output, the
+        // frontend's "Reload" adopted it, and the next keystroke wrote replacement characters
+        // over the file's real bytes with a compare-and-swap that *passed* -- the hash is of the
+        // raw bytes and the raw bytes had not changed.
+        //
+        // Not a conflict, because a conflict offers a choice between two versions and there is
+        // only one: the disk side is unrepresentable, so "Reload" would have nothing to load.
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "v1").unwrap();
+        let store = DocumentStore::new();
+        let (_, hash) = store.read(&target).unwrap();
+
+        fs::write(&target, [0x68, 0x69, 0xff, 0xfe]).unwrap();
+
+        let result = store.write(&target, "my edits", &hash);
+
+        assert!(
+            matches!(result, Err(MeddError::NotUtf8 { .. })),
+            "expected NotUtf8, got {result:?}"
+        );
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            [0x68, 0x69, 0xff, 0xfe],
+            "and nothing was written"
+        );
+    }
+
+    #[test]
+    fn a_non_utf8_external_change_emits_nothing_and_does_not_advance_the_hash() {
+        // Door one, and the second assertion is the load-bearing one. Emitting nothing is only
+        // half the fix: if `last_known` advanced to the new hash, medd would have recorded seeing
+        // this content while telling the frontend nothing, and the next autosave's
+        // compare-and-swap would pass and overwrite it. Leaving the hash stale is what makes this
+        // degrade into the refusal above rather than into a successful write.
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "v1").unwrap();
+        let store = DocumentStore::new();
+        let (_, original_hash) = store.read(&target).unwrap();
+
+        fs::write(&target, [0x68, 0x69, 0xff, 0xfe]).unwrap();
+
+        assert_eq!(
+            store.check_external_change(&target),
+            None,
+            "nothing lossy may reach the frontend"
+        );
+        assert!(
+            store.is_tracked(&target),
+            "the document is still open; it must stay tracked"
+        );
+
+        // The chain: watcher silent, so the frontend still holds the original hash -- and the
+        // write it eventually attempts is refused rather than passing a stale-but-matching CAS.
+        assert!(matches!(
+            store.write(&target, "my edits", &original_hash),
+            Err(MeddError::NotUtf8 { .. })
+        ));
     }
 
     #[test]

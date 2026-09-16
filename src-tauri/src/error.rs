@@ -7,7 +7,14 @@ use serde::Serialize;
 use crate::document::ContentHash;
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+// `rename_all_fields`, not `rename_all`. The distinction is the whole bug this attribute was
+// changed to fix: `rename_all` camelCases the *variant* names, so `Conflict` went over the wire as
+// `"conflict"` while every reader in the frontend compares against `'Conflict'` — and it left the
+// struct-variant *fields* alone, so `current_content` arrived where `currentContent` was read.
+// Both halves were wrong, in opposite directions, and nothing caught it because the frontend tests
+// mock the payload they want rather than the one Rust sends. The wire format is pinned by
+// `wire_format` below; `doc/doc.ts` points at it rather than restating it.
+#[serde(tag = "kind", rename_all_fields = "camelCase")]
 pub enum MeddError {
     /// A filesystem operation failed for a reason not covered by a more specific variant.
     Io { path: PathBuf, message: String },
@@ -52,3 +59,68 @@ impl std::fmt::Display for MeddError {
 }
 
 impl std::error::Error for MeddError {}
+
+#[cfg(test)]
+mod wire_format {
+    use super::*;
+    use crate::document::ContentHash;
+    use std::path::PathBuf;
+
+    // This is a *contract* test, and the only place the contract can be tested. The frontend's
+    // own tests mock rejections, so they assert that the frontend agrees with itself -- which is
+    // how `{kind: "conflict", current_content}` shipped against six green tests all mocking
+    // `{kind: "Conflict", currentContent}`. Every CAS-rejected write therefore missed
+    // `isConflictError` and fell through to a console line: increment 7's named blocker case,
+    // "a rejected compare-and-swap write becoming a conflict", was dead in production.
+    //
+    // So assert the exact bytes. A string comparison is deliberate over a structural one: the
+    // failure was a *name*, and a structural assertion built from the same enum cannot see a
+    // renaming.
+
+    #[test]
+    fn conflict_is_what_doc_ts_reads() {
+        let e = MeddError::Conflict {
+            current_content: "theirs".to_string(),
+            hash: ContentHash::of(b"theirs"),
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(
+            json.contains(r#""kind":"Conflict""#),
+            "doc.ts's isConflictError compares against 'Conflict': {json}"
+        );
+        assert!(
+            json.contains(r#""currentContent":"theirs""#),
+            "doc.ts reads e.currentContent: {json}"
+        );
+    }
+
+    #[test]
+    fn not_utf8_is_what_app_svelte_reads() {
+        let e = MeddError::NotUtf8 {
+            path: PathBuf::from("/w/x.md"),
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains(r#""kind":"NotUtf8""#), "{json}");
+        assert!(json.contains(r#""path":"/w/x.md""#), "{json}");
+    }
+
+    #[test]
+    fn io_and_outside_workspace_are_what_app_svelte_reads() {
+        let io = serde_json::to_string(&MeddError::Io {
+            path: PathBuf::from("/w/x.md"),
+            message: "boom".to_string(),
+        })
+        .unwrap();
+        assert!(io.contains(r#""kind":"Io""#), "{io}");
+        assert!(io.contains(r#""message":"boom""#), "{io}");
+
+        let outside = serde_json::to_string(&MeddError::OutsideWorkspace {
+            path: PathBuf::from("/elsewhere"),
+        })
+        .unwrap();
+        assert!(
+            outside.contains(r#""kind":"OutsideWorkspace""#),
+            "{outside}"
+        );
+    }
+}

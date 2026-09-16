@@ -42,10 +42,23 @@ export function isQuitInProgress(): boolean {
   return isShuttingDown
 }
 
+/** The shape a rejected `document_write` actually arrives in.
+ *
+ * **This contract is pinned in Rust, not here** — `error.rs`'s `wire_format` tests assert the exact
+ * JSON, because the tests in this directory mock rejections and so can only prove the frontend
+ * agrees with itself. That is not hypothetical: `{kind: "conflict", current_content}` shipped
+ * against six green tests all mocking `{kind: 'Conflict', currentContent}`, so every CAS-rejected
+ * write missed `isConflictError` and fell through to a console line — increment 7's named blocker
+ * case, dead in production. If either side changes, change the Rust test; it is the side that can
+ * fail. */
 interface ConflictErrorPayload {
   kind: 'Conflict'
   currentContent: string
   hash: string
+}
+
+function isNotUtf8Error(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { kind?: unknown }).kind === 'NotUtf8'
 }
 
 function isConflictError(e: unknown): e is ConflictErrorPayload {
@@ -220,10 +233,25 @@ async function performWrite(path: string, request: WriteRequest): Promise<void> 
         // watcher-driven external change, just discovered by our own write losing the race
         // instead of a filesystem event arriving first.
         markConflict(path, e.currentContent, e.hash)
+      } else if (isNotUtf8Error(e)) {
+        // The document on disk is no longer something medd can represent — replaced by something
+        // binary while this tab held text. That is the same situation as it being deleted: there
+        // is nothing left to sync with, so `detached` is the honest state rather than a new one,
+        // and it already suspends autosave, which stops this retrying against a file it can never
+        // write.
+        //
+        // Deliberately *not* a conflict. A conflict offers a choice between two versions and
+        // there is only one here; `Reload` would have nothing to load. What this shares with a
+        // deletion is that the answer is the user's file, elsewhere.
+        //
+        // Scope, stated rather than implied: this makes the data safe — nothing lossy is written,
+        // and carried finding 6's write-back path is closed — and leaves the state
+        // under-signalled, because `detached` still renders only as a tab-strip glyph. That is
+        // carried finding 4's job, and this makes its absence matter in one more place.
+        markDetached(path)
       } else {
-        // Not part of D-11's design (Io/NotUtf8 during autosave is an edge case the plan doesn't
-        // give a UI to) — surfaced for visibility rather than silently retried forever, without
-        // inventing a per-tab error UI the plan doesn't ask for.
+        // Io during autosave is an edge case the plan gives no UI to — surfaced for visibility
+        // rather than silently retried forever, without inventing a per-tab error surface.
         // eslint-disable-next-line no-console
         console.error('medd: autosave failed for', path, e)
       }
