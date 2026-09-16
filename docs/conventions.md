@@ -631,6 +631,12 @@ Two things follow:
 
 - **Report what changed, not what it feels like.** *"A second instrument on an already-covered
   link"* is the fact. *"The fraction moved"* is an inference, and a flattering one.
+- **Distance from the artifact, not generosity, is usually the mechanism.** Someone reporting on a
+  document they read a summary of will drift from it — not because they are being kind, but because
+  they are a step further from the thing. Each reading is defensible and only the file settles it.
+  That is an argument for **whoever holds the artifact doing the checking**, rather than for the
+  reporter trying harder.
+
 - **The beneficiary of a generous reading is the right person to check it, and the wrong person to
   rely on for checking it.** On this project the correction has twice come from the person being
   credited — and examining *why* it worked makes the point stronger, not weaker. **Neither
@@ -645,6 +651,24 @@ Two things follow:
 
   If you wrote the generous reading, catching it is yours. The times it worked out the other way
   are not evidence the other route functions.
+
+---
+
+## Drift that understates coverage is quieter than drift that overstates it
+
+Both directions happen. They are not equally dangerous.
+
+A stale claim that something is **still open** gets corrected the moment someone tries to do it —
+the work itself disproves the document. A stale claim that something **cannot be covered** is never
+disproved, because *nobody re-checks a claim that something isn't possible.* It sits, and the thing
+it discourages stays undone.
+
+That happened here for **five increments**, on the user-facing surface of the one decision where
+autosave can destroy someone's work. A mock's comment attributed its own omission to the platform;
+everyone downstream read it as a limitation; limitations get accepted where omissions get fixed.
+
+**So audit claims of impossibility more often than claims of incompleteness.** The first kind is
+self-correcting and the second is self-sustaining.
 
 ---
 
