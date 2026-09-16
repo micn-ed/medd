@@ -18,6 +18,14 @@ my memory of them was a release out of date. **If you are reading this more than
 the commit named above, re-check before acting** — the checks used are named inline so they can be
 re-run rather than re-derived.
 
+**It has since happened again, in the other direction.** §2's harness row said *"nothing can emit a
+Rust-side event."* That was true when written and stopped being true when `eventMock.ts` began
+retaining handlers — five lines, in a file whose own comment had attributed the limitation to the
+platform. So the row understated what the harness covers, and D-11's entire user-facing surface had
+been unexaminable for five increments **because of a mock, not because of Blink**. A document like
+this drifts in both directions, and the direction that *understates* coverage is the quieter one:
+nobody re-checks a claim that something is not covered.
+
 ---
 
 ## 1. The one thing to know first
@@ -44,7 +52,7 @@ likely someone looks, not more likely it is right.** The count measures exposure
 |---|---|---|
 | **Rust tests** (130) | filesystem behaviour, the document core, watcher classification, quit coordination — against real temp files | anything above the IPC boundary; anything needing a running app or a window |
 | **Frontend tests** (137, vitest/jsdom) | the autosave and conflict state machine, tab model, render pipeline, matching | anything about what Rust actually sends — see the wire pins below; anything about rendering, since jsdom lays nothing out |
-| **Browser harness** (`npm run harness`) | typography, layout, measure, themes, tree, tabs, mode toggling — by eye and by measurement | **it is Blink; the app is WKWebView.** Clipboard, IME, native key handling, the real CSP, and the asset protocol are all untouched. It has no backend: `tauriMock.ts` never writes to disk and nothing can emit a Rust-side event |
+| **Browser harness** (`npm run harness`) | typography, layout, measure, themes, tree, tabs, mode toggling — and, since `eventMock.ts` began retaining handlers, **D-11's banner and detached states**, driven via `window.medd.emit` / `.externalChange` / `.removeOnDisk` | **it is Blink; the app is WKWebView.** Clipboard, IME, native key handling, the real CSP, and the asset protocol are all untouched. `tauriMock.ts` never writes to disk, and firing an event proves what the frontend does *on receipt* — never that Rust emits it, or with what payload |
 | **`wire_format` pins** (7, in `src-tauri/src/*.rs`) | that Rust's field and variant *names* match what the frontend reads | **vocabulary, not semantics.** They would not catch a path relative to the wrong root, or a hash of the wrong bytes |
 | **`scripts/mutants.sh`** (22 mutants) | that each guarded decision is detected by at least one test | only the decisions someone wrote a mutant for. See §5 |
 | **`command_shape` check** | that no `#[tauri::command]` calling a `blocking_*` API is missing `(async)` | one specific deadlock class, by reading source. Nothing else about runtime behaviour |
@@ -135,6 +143,19 @@ behaviour. Each says what would settle it.
 | **The end-to-end quit gesture** | see §6 | a keyboard-only script, which increment 10's CLI makes possible for the first time |
 | **CSP and the asset protocol** | the harness is a Vite dev server with no CSP; the real policy has never been exercised | loading a built `.app` and attempting a blocked resource |
 | **Clipboard, IME, macOS keybindings** | WKWebView differs from Blink and the harness cannot speak to it | increment 12's manual pass |
+
+**Moved out of this table:** D-11's user-facing surface. The conflict banner has now been seen in
+the harness and its contrast computed rather than eyeballed — **5.60:1 light, 9.63:1 dark**, both
+past AA's 4.5, reproduced independently here. Worth separating two claims that read alike and are
+not the same: *the colours are defined in both themes* was established earlier by reading
+`app.css`; *the colours are legible* needed the number. Only the second is a statement about the
+user.
+
+The detached state's **absence** of UI was likewise found by looking rather than by reading, and is
+now a carried fix in its own right — not "add a banner for detached" but one affordance meaning
+*unsaved*, in the two states where autosave is actually suspended. The `●` in the tab strip is the
+conflict marker, not a dirty dot; under D-5 there is no dirty state to show, except in exactly
+those two places, where nothing says so.
 
 ---
 
