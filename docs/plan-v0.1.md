@@ -45,11 +45,11 @@ This is the single most dangerous module in the product.
 
 - `document.rs`: `read(path) -> (String, Hash)`; content hashing; the `path → last_known_hash`
   map behind a mutex.
-- Atomic write: temp file in the **same directory** (`.medd-<name>.tmp`), `fsync`, copy the
-  original's permissions, `rename()` over the target.
-- Compare-and-swap: `write(path, content, expected_hash)` re-reads and re-hashes first, rejects
-  with `Conflict { current_content, hash }` on mismatch, and records the new hash **before
-  releasing the lock**.
+- Atomic write and compare-and-swap: the mechanism is **architecture.md §3's and `atomic.rs`'s**,
+  not restated here — staging, `fsync`, permissions, the rename, the hash recorded before the lock
+  is released, and `WhenAbsent`. Deliberately a pointer: the staging-file naming and the
+  create-or-refuse policy have both moved since this increment was written, and a copy of a
+  mechanism is a copy that goes stale while still reading as current.
 - `error.rs`: one error type, serialisable to the frontend.
 
 **Tests (all required before this increment closes):**

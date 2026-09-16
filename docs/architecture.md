@@ -5,6 +5,23 @@
 [scope-mvp.md](scope-mvp.md), [research/](research/)
 **Stage:** Architecture. No implementation code has been written.
 
+**How to read this document.** Its claims are not all the same kind of thing, and a reader who
+cannot tell which is which will trust the wrong half. Three kinds appear, and each is labelled
+where it matters:
+
+- **Facts about shipped code** — §2's module rules and predicates, §3's document lifecycle, §6's
+  watcher, §7's state files. These describe `main` and were mostly *corrected toward the
+  implementation*: the line-ending section, for instance, records that the spec was wrong and the
+  code was right.
+- **Design corrected by reading a dependency, before implementation** — §5's listeners and
+  activation, §9's socket path and shim. These were wrong as first imagined, found wrong by reading
+  `tao`, `tauri-runtime-wry` and the single-instance plugin, and corrected before code was written.
+  They are settled design, not observed behaviour, and §5 says so explicitly.
+- **Design as first imagined, not yet met by anything** — anything about v0.2 and later.
+
+The distinction matters because the two failure modes are opposite. A stale *fact* misleads about
+what the system does; a stale *design* gets implemented. Both have happened here.
+
 This document describes how medd is built. It takes the product decisions in
 [decisions.md](decisions.md) as given and does not relitigate them. Where it makes a technical
 choice with real alternatives, that choice is recorded as an ADR in [adr/](adr/) and referenced
@@ -121,6 +138,21 @@ they genuinely have in common.
 The naming carries the ruling. `resolves_to_directory`, not `is_directory` — the failure mode is
 someone simplifying it to `entry.file_type().is_dir()`, and a name containing *resolves* makes that
 substitution visibly wrong at the call site.
+
+**A command whose body calls a `blocking_*` platform API must be declared
+`#[tauri::command(async)]`.** A plain `#[tauri::command]` is `ExecutionContext::Blocking` and runs
+inline on the thread dispatching the IPC message — the main thread. The folder picker's
+`blocking_pick_folder` then waited *there* for a panel that needs the main run loop in order to
+appear, so medd deadlocked on every click of *Open Folder…* and never recovered. The app waited for
+itself.
+
+This rule is enforced by a source-level check (`commands.rs`'s `command_shape` tests) rather than
+by a behavioural one, because it has no runtime observable: it is a deadlock between a dependency
+and the platform event loop, invisible to unit tests, to the browser harness and to mutation. The
+same move as requiring an owned root in a signature — when a requirement has no observable, ask
+whether it is really a constraint on *capability*, and if it is, enforce the shape. The check reads
+its own source because the attribute is erased by the macro, so there is nothing left at runtime to
+assert against.
 
 **And no lock is held across a filesystem or OS call.** Every command was `ExecutionContext::
 Blocking` until increment 9, so commands could not overlap and a lock held across a syscall blocked
@@ -424,6 +456,24 @@ Paths crossing this boundary are always **absolute and canonicalised** by Rust. 
 constructs a filesystem path; it echoes back paths it was given. That single rule removes an
 entire category of path-handling bugs and makes the security posture trivial to state.
 
+**Errors cross this boundary too, and their wire shape is a contract that broke.**
+`#[serde(tag = "kind", …)]` on `MeddError` camelCases *variant* names and leaves struct-variant
+*fields* alone, so `Conflict` arrived as `{"kind":"conflict","current_content":…}` while every
+reader in the frontend compares against `'Conflict'` and reads `currentContent`. Both halves wrong,
+in opposite directions — and the effect was not cosmetic: `isConflictError` returned false for
+every real rejection, so a compare-and-swap-rejected write fell through to a console line. The
+conflict banner, Reload and Keep mine were all unreachable from that path.
+
+Nothing caught it because the frontend's tests *mock* rejections, so they assert that the frontend
+agrees with itself. **The wire format is therefore pinned on the Rust side** — `error.rs`'s
+`wire_format` tests assert the exact JSON, with string comparisons rather than structural ones,
+because the failure was a *name* and an assertion built from the same enum cannot see a renaming.
+`doc/doc.ts` points at those tests as the contract's owner rather than restating the shape.
+
+The general rule this leaves: **where a contract spans the two runtimes, it is pinned on the side
+that can fail.** A mock encodes the caller's expectation, so a test built on one can only ever
+confirm the caller is self-consistent.
+
 ---
 
 ## 5. Launch and routing
@@ -438,18 +488,53 @@ delivers them differently:
 - **Finder double-click and "Open With"** never produce a second process at all. macOS routes them
   to the *already running* app as Apple Events, surfacing in Tauri as `RunEvent::Opened`.
 
-So the design is **two listeners, one router**. Both terminate in a single Rust function:
+So the design is **three listeners, one router, one activator** — and the third listener is what
+makes the split necessary rather than tidy:
+
+| Listener | Shape | Carries a document? | Calls |
+|---|---|---|---|
+| `tauri-plugin-single-instance` callback | `argv` + `cwd` | usually — not for bare `medd` | `route_open` if any paths, then `activate` |
+| `RunEvent::Opened { urls }` | Apple Event | always | `route_open`, then `activate` |
+| `RunEvent::Reopen { .. }` | Apple Event | **never** | `activate` only |
+
+`Reopen` — a Dock-icon click, or `open -a` against a running instance — is the only signal medd
+receives that means *"come forward, with no document attached"*, which is exactly what bare `medd`
+and a Dock click are. It carries no paths, so it cannot call the router, and **that is the tell
+that activation was never part of routing.** It was folded in because, with only two listeners,
+every launch happened to carry a document.
 
 ```rust
-fn route_open(paths: Vec<PathBuf>) {
-    // canonicalise; classify each as workspace-relative, loose file, or directory
-    // if the frontend is ready: emit open:request
-    // otherwise: push onto the pending-open buffer
-    // then, best-effort: window.show(); window.set_focus();
-}
+/// Canonicalise, classify, and hand the frontend whatever it should open. Never activates.
+fn route_open(paths: Vec<PathBuf>) -> …
+
+/// Bring the window forward, whatever state it is in. Called by all three listeners.
+fn activate(window: &Window)
 ```
 
-Two properties of that function are load-bearing:
+Splitting them also disposes of the bare-`medd` case rather than adding one: with activation
+extracted there is no empty-path branch to define, because the callback calls `activate` and never
+enters the router.
+
+**Neither listener hands `route_open` a list of paths.** Both conversions are fallible and belong
+in the listeners, so the router still takes canonical paths:
+
+- The single-instance callback receives `std::env::args()` **including `argv[0]`**, which is the
+  path of the second process's own binary. Unskipped, every CLI invocation tries to open the medd
+  binary as a document — and it fails *dirtily*, because that path canonicalises, classifies as a
+  loose file, and comes back `NotUtf8`.
+- `RunEvent::Opened` carries `urls: Vec<url::Url>`, not paths. `Url::to_file_path()` is fallible,
+  and the same event is the deep-link delivery path, so non-`file:` URLs can legitimately arrive
+  and must be dropped rather than unwrapped.
+
+**A fourth entry point exists and is deferred, not absent.** `WindowEvent::DragDrop` carries real
+file paths, is enabled by default, and bypasses both path-carrying listeners — it arrives from the
+webview layer rather than as `argv` or an Apple Event. Dropping a `.md` file on the window
+currently does nothing at all. It is scoped to v0.2 alongside Finder registration, because a file
+arriving from the Finder is one concern and splitting it across two releases would be incoherent;
+when it lands it is one more listener calling `route_open`, and the one listener that never needs
+the pending-open buffer.
+
+Two properties of the router are load-bearing:
 
 **The pending-open buffer.** `RunEvent::Opened` can fire before the WebView has attached its event
 listeners — this is the documented behaviour, not an edge case. A fire-and-forget event would be
@@ -457,12 +542,46 @@ dropped, and the user's double-clicked file would silently fail to open. So open
 Rust state and drained by the frontend's `frontend_ready()` call. Cold launch from Finder goes
 through the buffer every single time; this is the normal path, not the exceptional one.
 
-**Window activation is best-effort.** `set_focus()` is unreliable on macOS — the underlying
-`NSRunningApplication.activateWithOptions` has been flaky since Big Sur and is deprecated as of
-Sonoma, with two open Tauri issues tracing to it. No IPC choice fixes this. medd therefore
-attempts activation and does not depend on it: **the file opens as a tab whether or not the window
-comes forward.** Nothing in the design may assume the window is frontmost after a routed open.
-This should be spot-tested early against real window states.
+**Window activation is best-effort in one of three states, and deterministic in the other two.**
+This section previously said it was simply unreliable. That was corrected by reading `tao` rather
+than by reading medd — a correction of the *design*, before any of this was implemented — and what
+it showed is that `set_focus()` is guarded —
+
+```rust
+if !is_minimized && is_visible { util::set_focus(&self.ns_window) }   // no else
+```
+
+— and returns `Ok(())` regardless. So in the two states where activation is most needed it is not
+unreliable, it is **skipped deterministically while reporting success**:
+
+| Window state | Why activation fails | Fixable here? |
+|---|---|---|
+| Visible but occluded | `activateIgnoringOtherApps:` has been flaky since Big Sur, deprecated on Sonoma | **No.** This is the real platform limitation. |
+| **Minimised** (Cmd+M) | `tao`'s `isMiniaturized()` guard skips the call entirely | **Yes** — `unminimize()` first |
+| **Hidden** (Cmd+H) | the same guard, via `isVisible()` | **Probably** — `show()` first; to be measured |
+
+So `activate()` is **`unminimize()` → `show()` → `set_focus()`**, in that order, each step present
+to clear a specific guard. `show()` is only `makeKeyAndOrderFront:`; whether that clears
+`isMiniaturized` on a miniaturised window is version-dependent folklore, while `deminiaturize:` is
+documented. The general rule: **prefer the call whose behaviour is documented over the call that
+happens to work.**
+
+Do **not** branch on `Reopen`'s `has_visible_windows`: the CLI path carries no such flag, so
+branching on it would fix the Dock click while leaving `medd notes.md` broken when minimised —
+which removes the bug's most reproducible trigger without removing the bug. Query
+`is_minimized()`/`is_visible()` on the window instead.
+
+For the one state that stays unreliable the posture stands: the file opens as a tab whether or not
+the window comes forward, and nothing may assume the window is frontmost after a routed open.
+`is_focused()` exists, so the manual pass *asserts* activation in each of the three named states
+with a predicted outcome rather than eyeballing it.
+
+**Implementation status.** `routing.rs` is still a stub in `main`: everything above is settled
+design, corrected against `tao` and `tauri-runtime-wry` before the code was written, not a
+description of shipped behaviour. `RunEvent::Opened`'s *handler* is part of increment 10, but the
+event cannot fire until v0.2 adds `CFBundleDocumentTypes`, so its hook correctness is unverifiable
+in v0.1 — the handler is written, its shaping is testable, and whether the event ever arrives is a
+v0.2 question. Full reasoning in [ADR-003](adr/003-launch-routing.md).
 
 `open:request` handling in the frontend, per path: a directory becomes the workspace; a `.md` file
 under the current root opens as a tab; a `.md` file outside it opens as a loose tab with the tree
