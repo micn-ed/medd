@@ -514,7 +514,8 @@ safe, and are therefore queued rather than blocking — but none of them ship br
 | # | Finding | Why it matters |
 |---|---|---|
 | ~~3~~ | **Done** (promoted to blocker, fixed in the increment-7 batch). A write settling after a conflict resolution clobbers the resolved state | Produces a conflict banner that no user edit caused — D-11's own named fatal failure. Needs a per-tab generation counter captured before the await. |
-| 4 | `detached` is a terminal, invisible state | A deleted file silently stops autosaving forever, with nothing on screen and no recovery — a recreated file comes back untracked. `git checkout` across branches does exactly this. |
+| 4 | `detached` is a terminal, invisible state — **and P-2, a Must, is false in it** | The only exit from a detached tab is closing it, which P-2 guarantees is always safe, and which takes the buffer with it. So this is not a defect with a workaround: **the workaround is the violation.** Read as "a tab gets stuck and you close it" it is an annoyance with an escape; read correctly it is a requirement failure with no escape that does not lose data. The priority follows from that rather than from how the symptom reads. |
+| ~~4b~~ | (original wording below) | A deleted file silently stops autosaving forever, with nothing on screen and no recovery — a recreated file comes back untracked. `git checkout` across branches does exactly this. |
 | 5 | Any read failure is reported as deletion | `EACCES`/`EIO`/`EMFILE` — the last most likely during the filesystem storms that generate watcher traffic — all latch a tab into finding 4's state. Only `NotFound` should mean removed. |
 | 6 | A non-UTF-8 external change is lossily converted, and the CAS lets medd write it back | `read()` refuses non-UTF-8 but `check_external_change` uses `from_utf8_lossy`, and the hash is of the raw bytes — so a later autosave passes CAS and writes replacement characters over the file's real content. **The line-ending fix now inherits this exposure:** detection in `read()` only ever sees valid UTF-8, but in `check_external_change` it runs on lossy output. A UTF-16LE document — an ordinary way for a `.md` to arrive from Windows — decodes to `\r\0\n\0` per break, so no `\r\n` is found, the lone-`\r` and lone-`\n` counts tie, a CRLF file is detected as LF, and the next write rewrites every line ending. 6's ruled fix closes this completely, since the content never reaches detection. |
 | — | `document_close` is specified in architecture.md §4 and does not exist | `last_known` grows for the session, loose-document watches are never released, and asset-protocol grants are never revoked. |
@@ -701,6 +702,24 @@ of currently-open documents — the worst subset.
   frontend **on Windows** — so macOS is probably unaffected. But CodeMirror uses HTML5
   drag-and-drop to move selected text, which E-6's "standard editing affordances" implies, and
   nobody has looked. Probably nothing; cheap to check; annoying to find after shipping.
+- **GATE, not hardening: the CSP must be shown to be enforced.** Increment 5 accepted an
+  arbitrary-read command surface **on purpose** — `document_read` takes any absolute path because
+  D-15 requires it, and no restriction exists that would not break a product decision. The stated
+  mitigation is that *"the WebView must never execute script it did not ship, and must never be
+  able to make an outbound request."* **That control has never been exercised**, which means the
+  argument that a knowingly accepted risk is acceptable rests on something unverified. That is not
+  one manual-pass item among many; it is the check that decides whether the risk was mitigated at
+  all.
+
+  Narrowed by what has been established: the policy **is** compiled into the shipped binary with
+  the expected directives — verified against the built `.app`, which rules out the
+  silently-absent-at-build-time failure. What remains is enforcement, which is WKWebView's and
+  genuinely platform-bound.
+
+  Three checks against a built `.app`, one run: a remote `<img>` in a document does not load; an
+  inline `<script>` in rendered Markdown does not execute; the asset protocol refuses a path
+  outside the workspace root. **If any fails, the arbitrary-read surface is unmitigated and that is
+  a v0.1 blocker rather than a hardening item.**
 - **Manual pass:** window focus on second launch (checked, not asserted); WKWebView clipboard and
   IME; macOS keybindings; reading typography in both themes.
 - **Restore debug symbols for release diagnosis, or decide not to.** The skeleton set
