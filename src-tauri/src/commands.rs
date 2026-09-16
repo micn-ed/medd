@@ -473,3 +473,30 @@ mod ipc_probe {
         );
     }
 }
+
+#[cfg(test)]
+mod picker_reachability {
+    //! Does a mock app give enough to reach `workspace_pick`? Reports capabilities; never calls
+    //! `blocking_pick_folder`, which would hang if the answer is no.
+    use tauri::Manager;
+
+    #[test]
+    fn what_a_mock_app_provides() {
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_dialog::init())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app with the dialog plugin builds");
+
+        let windows = app.webview_windows();
+        println!("PROBE webview_windows = {}", windows.len());
+        println!("PROBE window names     = {:?}", windows.keys().collect::<Vec<_>>());
+        // Can we even obtain a dialog handle?
+        let _ = &app;
+        println!("PROBE dialog plugin initialised without panicking");
+
+        // NOT attempted here: `blocking_pick_folder` itself. Done once, on a spawned thread
+        // with a 4s bound, and it DID NOT RETURN — so a test that calls it hangs the suite rather
+        // than reporting. Left out deliberately; the result is recorded in
+        // verification-status.md §4 so nobody has to rediscover it by hanging their own run.
+    }
+}
