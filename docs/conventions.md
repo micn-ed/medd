@@ -155,6 +155,15 @@ green, which is worse than a failure because nobody investigates a pass.
 
 ## A rule about a class is guidance for new members and an audit of existing ones
 
+**Including when the class is instances of this rule.** The smallest recorded case: a document
+said *"nothing can emit a Rust-side event"* in one section and *"nothing can emit this specific
+event"* in another. The first was pointed out and corrected. The second — same claim, same
+document, same author — was left standing, by the person who had just been told about the class,
+in the act of fixing the instance.
+
+So the audit half is not optional and is not satisfied by having understood the point. Fixing where
+you were pointed is the default behaviour the rule exists to override.
+
 Only the first happens by default. A constraint discovered while designing something new reads as a
 constraint *on that new thing* — and the members that already exist, in the same class, are never
 revisited.
@@ -669,6 +678,23 @@ everyone downstream read it as a limitation; limitations get accepted where omis
 
 **So audit claims of impossibility more often than claims of incompleteness.** The first kind is
 self-correcting and the second is self-sustaining.
+
+**Beware a reproduction that matches the symptom by a different mechanism.** The folder-picker
+deadlock hangs. A test calling the same function also hangs — and *not for the same reason*: the
+deadlock is blocking the main thread a panel needs, while a mock app has **no run loop for a panel
+to appear on at all**. A bounded test would therefore be measuring "no run loop", and would **go
+green the day the deadlock returned.**
+
+That is a new face of the vacuity family and the only one so far identified *before* the test was
+written. The tell: the reproduction succeeds without the precondition the bug requires. Ask what
+the symptom would be *if the bug were fixed* — if the answer is "the same", you are not reproducing
+it.
+
+The honest form of such a limit is neither "no instrument reaches it" nor "nobody has found one".
+It is: **the call is reachable, the outcome is unassertable, and the scenario cannot be constructed
+because its precondition does not exist in a test.** That is a limit on what can be *concluded*,
+not on what can be *called* — and it is the version someone deciding how hard to look actually
+needs.
 
 **And an impossibility claim in a *verification* document is self-sealing twice over:** it tells
 the reader not to try, and it is written by the person whose job is to know. Nobody audits the
