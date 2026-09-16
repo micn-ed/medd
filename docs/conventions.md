@@ -379,9 +379,26 @@ text rather than from the type. An assertion constructed from the same enum cann
 which is what the failure was. And have the other side point at those tests as the contract's owner
 rather than restating the shape.
 
-**Audit the whole boundary once, not the instance you found.** Seven types cross medd's; one is
-pinned, and the other six are correct *by accident of vocabulary* — their fields are single words,
-so camelCase happens to be the identity function. That is not the same as being right.
+**Ground the assertion in the consumer, not in the type.** A pin that says *"`Tree.svelte`
+compares `entry.kind` against `"directory"`"* and asserts that literal string checks the contract.
+One built from the enum restates it — which is the error the original bug was made of, one level
+up.
+
+**Each pin must fail for its own reason.** Validated by mutation: dropping the rename attribute
+from one type kills that type's pin *and nothing else*. A pin that dies alongside twenty others
+tells you something broke, not **what** broke, and at a boundary the name of the thing that moved is
+most of the value.
+
+**Audit the whole boundary once, not the instance you found.** Seven types cross medd's, and after
+the audit all seven are pinned. Four were correct only *by accident of vocabulary* — single-word
+fields make camelCase the identity function — and their tests **say so**, so nobody reads a passing
+result as evidence of design.
+
+**And state what the pins do not buy.** They fix the boundary's *vocabulary*, not its *semantics*:
+they establish that one side emits `relativePath` and the other reads `relativePath`. They would not
+catch a path computed against the wrong root, or a hash of the wrong bytes. "The boundary is
+tested" is a larger claim than the pins support, and seven green results will imply it unless
+something says otherwise.
 
 ---
 
