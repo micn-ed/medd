@@ -897,8 +897,20 @@ unverifiable by eye for six increments — during which a CSS specificity bug sh
 and reading mode's measure ran about 40% over its intended width because `ch` is the advance width
 of the "0" glyph rather than of an average character in running prose.
 
+Also verified there, since increment 12's audit: **D-11's conflict banner and the detached tab
+state.** The harness's event mock previously discarded its listeners, on the stated grounds that
+"there is no real backend here, so nothing will ever emit `document:changed-on-disk`" — a true
+premise with an invalid conclusion, because firing an event into the frontend's own listeners needs
+no backend, only somewhere to keep them. So the entire user-facing surface of the one decision
+where autosave can destroy work had never been looked at: the banner was asserted only in jsdom,
+which lays nothing out, and the detached state's absence of UI was found by *reading*
+`App.svelte`. `window.medd.externalChange(path)` and `.removeOnDisk(path)` now reach both.
+
 It proves nothing engine-specific: the harness is Blink, the app is WKWebView. A green harness says
-nothing about clipboard, IME, or native key handling — those remain hand-verified below.
+nothing about clipboard, IME, or native key handling — those remain hand-verified below. It also
+says nothing about whether Rust *emits* those events: the mock exercises what the frontend does on
+receipt, and the emitting side is pinned separately by `watcher.rs`'s `decide` tests and the
+`wire_format` pins.
 
 **Verified by hand:**
 - Window focus on a second launch — known unreliable on macOS (§5), so it is checked, not asserted.
