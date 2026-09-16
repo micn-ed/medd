@@ -48,6 +48,9 @@ how correct code gets written, not a verification step. Acceptance is somebody e
 
 - `docs/handoff.md` — full context, history, how to work here
 - `docs/todo.md` — ready-to-execute roadmap, no archaeology required
+- `docs/verification-status.md` — **read §1 and §2 before you read a green test suite.** What each
+  instrument here can and cannot establish. 130 passing Rust tests are weaker evidence than they
+  look, in ways that are not obvious.
 - `docs/plan-v0.1.md` — the twelve increments and their status
 - `docs/architecture.md` — how it is built, and why
 - `docs/decisions.md` — D-1…D-16, **locked**. Code that diverges from one is a finding, not a
