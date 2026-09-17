@@ -1033,3 +1033,32 @@ merges, **while still reading as current**.
   The tell to watch for: **an experiment whose two arms agree more neatly than the thing being
   measured should allow.** Agreement is the expected shape of an instrument that did nothing, and
   it is also the most reassuring shape a result can take.
+
+- **An absence has a cause, and the cause determines what to do about it.** The entry above is
+  about *finding* an absence. This is the next step, and skipping it wastes work: at least four
+  causes are **indistinguishable from inside the repository** and want four different responses.
+
+  | what the repo shows | actual cause | correct response |
+  |---|---|---|
+  | file not present | never written | write it |
+  | file not present | written, uncommitted elsewhere | recover and land it |
+  | file not present | deliberately deferred | leave it; check the decision still holds |
+  | file not present | blocked on a person | do nothing; find out what unblocks them |
+
+  The instance: `verification-status.md` said the CLI shim *"has not been written."* It had been —
+  `scripts/medd`, `make install-cli` and `test-shim.sh` were sitting uncommitted in a worktree
+  paused by its owner's user. A stranger acting on that wording writes the shim, and the duplicate
+  surfaces at merge time if at all. That is not a documentation nicety; it is wasted work with a
+  collision at the end of it.
+
+  **The diagnosis worth carrying: the claim was accurate about what was checked and wrong about
+  what it implied.** `scripts/` really did contain only `mutants.sh`. *The repository not
+  containing something* and *the thing not existing* are different facts, and only the second is
+  what a reader acts on. Reporting the first as though it were the second is the same error as
+  reporting an instrument's reading as the claim it was taken to support — one level up, about
+  provenance rather than measurement.
+
+  Three instances of it landed in one document, all self-caught, in different sections — which is
+  what makes it structural rather than careless. So: **when recording that something is missing,
+  record how you know and what you checked**, because "absent from the tree" is a fact about the
+  tree, and the reader needs a fact about the work.
