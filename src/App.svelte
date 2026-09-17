@@ -300,6 +300,15 @@
     flex: 1;
     display: flex;
     flex-direction: column;
+    /* Both axes, and the width is the one that bites. `.content` is a flex *item* of `.body`
+       (row) as well as a flex *container* (column), and a flex item's default `min-width: auto`
+       refuses to shrink below its content's min-content width. Next to a `.sidebar` that is
+       `flex-shrink: 0` at 240px, that gave the whole app a hard floor: measured at 1166px with an
+       ordinary document, set by a 759px code block in the preview. Below that it simply stopped
+       shrinking, which is the 14-inch report -- and why closing the sidebar "fixed" it, since that
+       returns exactly the 257px the floor was over by. With `min-width: 0` the floor is 484px.
+       The code block itself is fine: it already has `overflow-x: auto` and scrolls. */
+    min-width: 0;
     min-height: 0;
   }
 
