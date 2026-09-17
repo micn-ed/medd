@@ -217,7 +217,15 @@ handlers it can fire `app:before-quit` into the frontend's own listener, so link
 instrument on it. That is Blink rather than WKWebView and appearance rather than bytes — a weaker
 instrument on a link already established, not movement in the fraction. `tauriMock.ts` still never
 writes to disk, so the last link stays out of reach. Increment 10's CLI closes the gap, because
-`medd fixture.md` leaves the editor focused and every step after is keyboard-only.
+`medd fixture.md` would leave the editor focused and every step after keyboard-only.
+
+**As of increment 10's merge, it does not close it yet.** The Rust half landed — single-instance
+plugin, `RunEvent::Opened`, `frontend_ready`, `route_open`, the pending-open buffer, activation —
+but **`scripts/medd` and `make install-cli` did not**. `scripts/` contains only `mutants.sh`, and
+the Makefile has only `dev` and `build`. So there is still no way to open a document without
+clicking, which is the single thing the gesture was blocked on. The gate is unchanged and the
+reason is now specific: not "the harness can't reach it" but "the shim that would make it
+keyboard-only has not been written.
 
 *(This paragraph said "nothing can emit `app:before-quit`" for a while after §2's identical claim
 was corrected — the same sentence, fixed in one place and left standing in another. Recorded
