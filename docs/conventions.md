@@ -845,9 +845,32 @@ merges, **while still reading as current**.
   grep -c 'mod command_shape' commands.rs           # guard present
   ```
 
-  Anchor those on `^#\[`. A bare `grep -c 'command(async)'` returns 6 on main, because the guard's
-  own prose explains the rule it enforces — **the documentation of an invariant inflates the
-  measurement of it**, which is its own small lesson about counting strings instead of structures.
+  Anchor those on `^#\[`, and the reason is the sharpest thing in this entry. The check first
+  handed over was `grep -c 'command(async)' >= 2`. Measured against main with **every real `(async)`
+  attribute reverted**:
+
+  ```
+  real ^#[tauri::command(async)] attributes  ->  0      (the fix entirely gone)
+  bare grep -c 'command(async)'              ->  4      (prose only)
+  the check                                  ->  PASSES
+  ```
+
+  **A verification step that returns "clear" in exactly the state it exists to catch.** Its result
+  could not contradict the thing it was checking — the same defect as a test that passes when its
+  mechanism never runs, arriving in the very message that warned the guard sat inside one
+  resolution's blast radius.
+
+  **Why it inflated is the part to remember: the prose doing the inflating was written by the same
+  person writing the check.** The guard's explanation of the rule it enforces, and the §2 rule
+  behind it, came from the architect's own rulings; so did the grep. Documenting an invariant
+  inflates any loose measurement of it, and the two are usually written *in the same sitting*, when
+  the wording is freshest in mind and therefore most likely to match a pattern typed from memory.
+  Documenter and measurer are the two roles that would otherwise catch each other, and here they
+  were one role.
+
+  So: count **structures, not strings** — anchor the pattern to something the prose cannot
+  accidentally satisfy. Anchoring is easy; *noticing that you need to* is the hard part, and the
+  person best placed to notice is the one least able to, because they wrote the text that hides it.
 
 - **A worktree stops others touching your files; it does not tell anyone what you are holding.**
   This is the gap the worktrees left, and it is the read-side counterpart to them. An unmerged
