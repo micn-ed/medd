@@ -131,7 +131,9 @@ failure mode this increment is sized to avoid.
   in-document anchor → scroll. (R-2, R-6)
 - **Image resolution** against the *document's own directory*, not the workspace root — this is
   what makes loose files (D-15) render correctly. Rewritten `src` uses Tauri's asset protocol,
-  scoped to the workspace root plus the directories of open loose documents.
+  scoped as D-17 defines: **every** workspace root opened this session plus the directories of
+  loose documents opened this session. Not one root, and not *open* documents — the grant outlives
+  both the tab and the workspace switch, because `FsScope` has no revocation.
 - Re-render on a debounce, not per keystroke.
 - **Set a real CSP. This is a load-bearing security control, not hygiene.** The skeleton left
   `"csp": null`, which is the scaffolder's default and fine for an app that renders nothing. It
@@ -148,8 +150,11 @@ failure mode this increment is sized to avoid.
   requirement about capability, not just convenience — a page that cannot reach the network cannot
   exfiltrate what it reads.
 
-  Scope the asset protocol to the workspace root and the directories of open loose documents,
-  nothing wider.
+  Scope the asset protocol to the workspace root and the directories of loose documents as they
+  are opened. **"Nothing wider" was the original wording and D-17 retires it as unachievable**: the
+  grant cannot be narrowed later, so the set only grows, and the CSP rather than the scope is what
+  closes the exfiltration path. Grant conditionally anyway — with no revocation, granting only what
+  is needed is the only control that exists.
 
 **Tests — golden files.** A corpus of `.md` inputs with expected HTML fragments covering tables,
 task lists, footnotes, strikethrough, fenced code, images, nested emphasis, and each of the four
@@ -718,8 +723,26 @@ of currently-open documents — the worst subset.
 
   Three checks against a built `.app`, one run: a remote `<img>` in a document does not load; an
   inline `<script>` in rendered Markdown does not execute; the asset protocol refuses a path
-  outside the workspace root. **If any fails, the arbitrary-read surface is unmitigated and that is
-  a v0.1 blocker rather than a hardening item.**
+  **outside the granted scope**, with that set enumerated as D-17 defines it. **If any fails, the
+  arbitrary-read surface is unmitigated and that is a v0.1 blocker rather than a hardening item.**
+
+  **The third check used to say "outside the workspace root", and that wording is broken in both
+  directions under D-17.** It passes trivially in the common case — one workspace, try `/etc/passwd`,
+  refused, green — having established nothing about the actual granted set. And it *fails while the
+  app behaves exactly as designed*: open workspace A, then B, then try a path inside A, and
+  `is_allowed` correctly returns true because A is still granted. **A gate that goes red on
+  conforming behaviour gets "fixed" by narrowing its setup to one workspace**, which leaves the
+  trivial version above wearing a blocker's authority.
+
+  It reads as wrong because it was written for the world route 2 creates — a stable root plus
+  validation against live state is exactly "refuses a path outside the workspace root". D-17
+  deferred route 2 to increment 12 and left increment 12's gate asserting route 2's guarantee.
+  **Kept here as the wording route 2 restores**, rather than deleted: if the audit adopts route 2,
+  the original sentence becomes correct again.
+
+  What the narrowed check still buys is worth stating, since it is less than it looks: it proves
+  enforcement exists at all, and nothing more. **The exfiltration closure rests on checks one and
+  two**, which is where D-17 says the load-bearing layer actually is.
 - **Manual pass:** window focus on second launch (checked, not asserted); WKWebView clipboard and
   IME; macOS keybindings; reading typography in both themes.
 - **Restore debug symbols for release diagnosis, or decide not to.** The skeleton set
