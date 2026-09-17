@@ -126,3 +126,34 @@ the second batch finds the hash already current and returns `None`. It is a reso
 the answer belongs in the design rather than in a later memory-growth investigation.
 
 **Criterion either way: whatever set the fix grows, say what bounds it.**
+
+### And the scope half is a security boundary, which changes what welding costs
+
+Three documents specify the same thing: the asset protocol is scoped to the workspace root plus
+**the directories of *open* loose documents**, "nothing wider" (plan §5), "nothing else is readable
+by the WebView" (architecture §11).
+
+**The implementation never revokes.** `allow_directory` at `commands.rs:193` has no counterpart —
+close the tab, switch workspace, it stays granted for the life of the process. So the WebView's
+readable set is already wider than three documents say, and grows monotonically.
+
+That matters more than the watch half, because **the scope is the only gate.**
+`resolveRelativePath` returns an absolute path unchanged and normalises `..`, so a document can
+reference any path on disk. Nothing else stops the load: the asset scope decides.
+
+Severity, stated precisely rather than alarmingly: **the exfiltration path is closed.** The CSP is
+`img-src 'self' asset: data:` with no remote origin and no outward `connect-src`, so a file loaded
+this way cannot leave the machine — it renders on screen and stops there. This is a local-read
+boundary being wider than specified, not data theft. Increment 5's own argument is the right frame:
+two layers, neither substituting for the other, and this is the first one being loose.
+
+**Where this bears on the ruling:** if scope and watch stay welded and the watch becomes
+unconditional, **the scope becomes unconditional with it** — granting the WebView read access to
+every directory a file was ever opened from. That turns my earlier resource concern into a
+boundary concern, and it is the strongest argument for unwelding them: *which directories may the
+WebView load from* and *which directories do we watch* have different correctness criteria, and
+only one of them is a security control.
+
+**Criterion: the scope set matches its specification — the directories of *open* loose documents —
+or the specification changes deliberately, in all three places, with a reason.** A grant with no
+release is the same imbalance as the watch, one layer up, and on the half where it counts.
