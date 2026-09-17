@@ -172,6 +172,69 @@ What should be recorded:
 
 ---
 
+## Amendment — the rename, after QA's correction
+
+QA is right that `tree:changed` has a working consumer, and the correction sharpens the scope
+point rather than weakening it. Verified: the emit sits directly above
+`app.state::<FileIndex>().invalidate()`, and across all seven backend events **`tree:changed` is
+the only one with no frontend listener at all.**
+
+**So one consumer is not a half-finished wire — it is the v0.1 design executed correctly.** The
+event was connected to the consumer v0.1 needed (quick-open's cache, which could not ship a
+knowingly stale index) and deliberately not to the one deferred to v0.3. Both halves were
+intentional. That is the opposite of the wire-format bug in kind, not merely in degree.
+
+### Rename: yes. Not to a cause-name
+
+QA's rule holds and I accept it (below). But the obvious application of it is wrong, and the
+argument that shows why is one the leader half-made and drew backwards.
+
+`workspace:changed-on-disk` is the natural cause-name — it parallels `document:changed-on-disk`
+exactly, same verb phrase, different subject. And the leader observes that such a name makes a
+payload *"the natural shape rather than an addition"*. That is true, and it is an argument
+**against** the name: the payload is refused above for reasons the rename does not touch — a
+coalesced batch spans many directories, so no single path represents it, and the boolean is the
+fold `decide` is batch-shaped to produce. Worse, the sibling it parallels *does* carry a payload,
+so the matching name makes the absence conspicuous rather than quiet. A name that invites
+something we have deliberately refused is a name that will be argued with every six months.
+
+**Name it for the obligation both consumers share.** Look at what they do: `FileIndex::invalidate()`
+and, once connected, `Tree.load()`. Both discard a cached listing and re-derive it. The backend's
+honest claim is *"the listing you hold may be stale"* — which the backend genuinely **can**
+produce, because it is the authority on whether the filesystem moved, even though it cannot re-list
+anything itself.
+
+> **`workspace:listing-stale`**
+
+It satisfies QA's rule: the emitter can produce staleness. It names the shared obligation rather
+than either consumer's reaction — which is what makes the gap visible, because *"a
+`listing-stale` event with one consumer means one listing is not being invalidated"* is a sentence
+someone can check, where `tree:changed` with one consumer reads as fine since quick-open's index is
+not a tree. And **it does not invite a payload**, because staleness is binary by nature, so Q2's
+answer stays settled instead of being reopened by the name.
+
+### QA's rule holds, and the survey is what licenses it
+
+> An event named for an effect its emitter cannot produce will make upstream tests read as
+> end-to-end ones.
+
+Accepted. The restraint in offering rather than filing it was right, and the thing that settles it
+is not the single rename: **they checked all seven events and found exactly one outlier.** That is
+a population check, not an anecdote — the difference between "this name misled us once" and "one of
+our seven names is of a kind that misleads, and here is the test for which". Generalising from one
+*fix* is thin; generalising from one *exception in a surveyed set* is not, and the survey is the
+part to keep.
+
+### One smaller thing, now that there is a real consumer
+
+`let _ = app.emit(…)` discards its result. Leave it, but say why in a comment rather than letting it
+sit unexplained beside a consumer that cannot fail: an emit fails essentially only when no webview
+exists — during shutdown, or after the window is destroyed — where discarding is exactly right.
+Unexplained, it reads as carelessness in the one place the leader already noticed nothing would
+notice.
+
+---
+
 ## On authoring
 
 I am not taking either fix. The manager's condition is that I review, you author, QA verifies — a
