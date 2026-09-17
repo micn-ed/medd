@@ -532,6 +532,185 @@ mod tests {
         );
     }
 
+    /// The CEO opens folders, always -- so the no-workspace gap does not explain their report and
+    /// the with-folder-open path has to be tested under the shapes their real use takes, rather
+    /// than declared explained because a neighbouring defect was found. Each of these is a
+    /// variation the flat root-level tests above do not cover.
+    mod with_a_folder_open {
+        use super::*;
+
+        /// Documents live in subdirectories. `watch_recursive` should cover them, and nothing
+        /// established that it does -- every test above puts the file directly in the root.
+        #[test]
+        fn a_document_in_a_nested_subdirectory_still_reloads() {
+            let dir = tempfile::Builder::new()
+                .prefix("medd-watcher-test-")
+                .tempdir()
+                .unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let nested = root.join("notes").join("2026").join("q3");
+            std::fs::create_dir_all(&nested).unwrap();
+            let file = nested.join("note.md");
+            std::fs::write(&file, "v1").unwrap();
+
+            let store = DocumentStore::new();
+            store.read(&file).unwrap();
+
+            let (mut watcher, rx) = FsWatcher::new().unwrap();
+            watcher.watch_recursive(&root).unwrap();
+
+            std::fs::write(&file, "v2 three levels down").unwrap();
+
+            let events = decide(&drain(&rx), Some(&root), &store);
+            assert!(
+                events.contains(&WatcherEvent::DocumentChanged {
+                    path: file.clone(),
+                    content: "v2 three levels down".to_string(),
+                    hash: ContentHash::of(b"v2 three levels down"),
+                }),
+                "a nested document must reload like a root-level one; got {events:?}"
+            );
+        }
+
+        /// The two real shapes combined: an editor saving by rename, to a file in a subdirectory.
+        #[test]
+        fn a_nested_document_saved_by_atomic_replace_still_reloads() {
+            let dir = tempfile::Builder::new()
+                .prefix("medd-watcher-test-")
+                .tempdir()
+                .unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let nested = root.join("notes");
+            std::fs::create_dir_all(&nested).unwrap();
+            let file = nested.join("note.md");
+            std::fs::write(&file, "v1").unwrap();
+
+            let store = DocumentStore::new();
+            store.read(&file).unwrap();
+
+            let (mut watcher, rx) = FsWatcher::new().unwrap();
+            watcher.watch_recursive(&root).unwrap();
+
+            let staging = nested.join("note.md~");
+            std::fs::write(&staging, "v2 nested atomic").unwrap();
+            std::fs::rename(&staging, &file).unwrap();
+
+            let events = decide(&drain(&rx), Some(&root), &store);
+            assert!(
+                events.contains(&WatcherEvent::DocumentChanged {
+                    path: file.clone(),
+                    content: "v2 nested atomic".to_string(),
+                    hash: ContentHash::of(b"v2 nested atomic"),
+                }),
+                "nested plus atomic is the ordinary case, not an exotic one; got {events:?}"
+            );
+        }
+
+        /// The frontend matches tabs by **exact path string** (`tabs.svelte.ts`'s `getTab`:
+        /// `t.path === path`), while the backend tracks and reports documents by their
+        /// **canonical** path (`tracking_key` canonicalises). If a tab is ever opened under a
+        /// path that is not already canonical -- anything reached through a symlink, which on
+        /// macOS includes `/tmp` and is common for synced or linked project folders -- then the
+        /// reload event names a path no open tab has, `getTab` returns undefined, and the handler
+        /// returns without reloading and without a banner.
+        ///
+        /// That is exactly the reported symptom: a folder open, a document edited externally,
+        /// and *neither* of the two things that should happen happening. This test pins which
+        /// path shape the backend emits, so the question becomes a checkable one about the
+        /// frontend's key rather than a guess.
+        #[test]
+        fn the_emitted_path_is_canonical_even_when_the_document_was_opened_through_a_symlink() {
+            let dir = tempfile::Builder::new()
+                .prefix("medd-watcher-test-")
+                .tempdir()
+                .unwrap();
+            let real_root = dir.path().canonicalize().unwrap();
+            let real_file = real_root.join("note.md");
+            std::fs::write(&real_file, "v1").unwrap();
+
+            // A symlinked route to the same directory -- what an opened folder looks like when it
+            // is reached through a link rather than its real location.
+            let link_dir = dir.path().parent().unwrap().join(format!(
+                "medd-link-{}",
+                real_root.file_name().unwrap().to_string_lossy()
+            ));
+            let _ = std::fs::remove_file(&link_dir);
+            std::os::unix::fs::symlink(&real_root, &link_dir).unwrap();
+            let linked_file = link_dir.join("note.md");
+
+            let store = DocumentStore::new();
+            // Opened through the symlink, which is the path a tab would be keyed by.
+            store.read(&linked_file).unwrap();
+
+            let (mut watcher, rx) = FsWatcher::new().unwrap();
+            watcher.watch_recursive(&real_root).unwrap();
+
+            std::fs::write(&real_file, "v2 external").unwrap();
+
+            let events = decide(&drain(&rx), Some(&real_root), &store);
+            let reported: Vec<_> = events
+                .iter()
+                .filter_map(|e| match e {
+                    WatcherEvent::DocumentChanged { path, .. } => Some(path.clone()),
+                    _ => None,
+                })
+                .collect();
+
+            let _ = std::fs::remove_file(&link_dir);
+
+            assert_eq!(
+                reported,
+                vec![real_file.clone()],
+                "the backend reports the canonical path"
+            );
+            assert_ne!(
+                reported[0], linked_file,
+                "and it is NOT the path the document was opened under -- so a frontend keyed by \
+                 the opening path cannot match this event. Whether that is reachable depends on \
+                 whether any entry point hands out a non-canonical path; this test establishes \
+                 that IF one does, the reload is silently lost."
+            );
+        }
+
+        /// Saving twice quickly is ordinary editor behaviour. The debouncer coalesces, which is
+        /// wanted -- but the surviving notification must carry the LATEST content, not the first.
+        /// Reporting v2 while v3 sits on disk would leave the buffer silently stale, and a
+        /// subsequent autosave would write the stale text back over the newer bytes.
+        #[test]
+        fn rapid_successive_saves_report_the_final_content_not_the_first() {
+            let dir = tempfile::Builder::new()
+                .prefix("medd-watcher-test-")
+                .tempdir()
+                .unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let file = root.join("note.md");
+            std::fs::write(&file, "v1").unwrap();
+
+            let store = DocumentStore::new();
+            store.read(&file).unwrap();
+
+            let (mut watcher, rx) = FsWatcher::new().unwrap();
+            watcher.watch_recursive(&root).unwrap();
+
+            std::fs::write(&file, "v2").unwrap();
+            std::fs::write(&file, "v3 final").unwrap();
+
+            let events = decide(&drain(&rx), Some(&root), &store);
+            let changed: Vec<_> = events
+                .iter()
+                .filter_map(|e| match e {
+                    WatcherEvent::DocumentChanged { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
+                .collect();
+
+            assert!(
+                changed.last() == Some(&"v3 final"),
+                "the last reload must carry what is actually on disk; got {changed:?}"
+            );
+        }
+    }
+
     #[test]
     fn an_external_atomic_replace_is_also_exactly_one_document_changed() {
         // The test above says "Neovim" and writes in place. Neovim, by default, does not: it
