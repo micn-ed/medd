@@ -146,7 +146,8 @@ finding, a known defect not yet fixed — silently breaks the arithmetic. It hap
 one mutant the failure count stayed at three and read as a clean survivor, while underneath, two
 baseline-red tests had flipped *green* (they assert a state clears, which disabling the mechanism
 also achieves) and two others had flipped red. Two real kills, perfectly masked, and the sum looked
-correct. The conclusion would have been "this mechanism is entirely uncovered", which was false. Where a test depends on
+correct. The conclusion would have been "this mechanism is entirely uncovered", which was false.
+Where a test depends on
 a timing window, a race, or an environment property, assert that property rather than assuming it —
 otherwise a slow machine or a cold start quietly converts a real test into a vacuous one that stays
 green, which is worse than a failure because nobody investigates a pass.
@@ -988,7 +989,8 @@ add it.
   This is the gap the worktrees left, and it is the read-side counterpart to them. An unmerged
   branch holds hunks in files that look untouched everywhere else: `main` is clean, `git status` is
   clean, the file opens clean — and the conflict surfaces later, inside someone else's commit.
-  Before editing a file another stream might hold, run **`git diff main origin/<branch> -- <paths>`**.
+  Before editing a file another stream might hold, run
+  **`git diff main origin/<branch> -- <paths>`**.
 
   The architect was told *"dev has the width bug, so you won't collide"* and ran the check anyway:
   `origin/medd-dev` had 47 unmerged insertions in the same file, from increment 10's launch routing
