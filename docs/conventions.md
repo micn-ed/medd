@@ -819,6 +819,27 @@ merges, **while still reading as current**.
   the message and the flag as filenames. Found on the first real use of the rule by someone other
   than its author, which is the usual way an under-specified instruction gets found.
 
+- **A worktree stops others touching your files; it does not tell anyone what you are holding.**
+  This is the gap the worktrees left, and it is the read-side counterpart to them. An unmerged
+  branch holds hunks in files that look untouched everywhere else: `main` is clean, `git status` is
+  clean, the file opens clean — and the conflict surfaces later, inside someone else's commit.
+  Before editing a file another stream might hold, run **`git diff main origin/<branch> -- <paths>`**.
+
+  The architect was told *"dev has the width bug, so you won't collide"* and ran the check anyway:
+  `origin/medd-dev` had 47 unmerged insertions in the same file, from increment 10's launch routing
+  — nothing to do with the width bug. The hunks were ten lines clear so the merge was clean, but
+  that was luck, and the check is what established it rather than assumed it.
+
+  **The assurance was not careless; it named the wrong thing.** *"Dev is working on X"* describes
+  what someone is **doing**, and the collision surface is what their branch is **holding**. Those
+  are different sets, and they diverge with time — a branch keeps holding its files long after the
+  work that created them is finished and forgotten. Merge state answers the question; activity
+  does not.
+
+  And a teammate's all-clear does not substitute for the command. The architect nearly skipped the
+  check *because* the leader had already given one — an assurance from someone who did not run it
+  carries no more information than not asking.
+
 - **Work in a `git worktree`, not a shared checkout.** `git worktree add ../medd-<task>` gives a
   separate working directory on its own branch, sharing the same object store — so nothing is
   duplicated but the checkout, and **another session physically cannot stash, reset or check out
