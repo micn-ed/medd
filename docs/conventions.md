@@ -731,6 +731,37 @@ were omissions wearing the costume of constraints.
 
 ---
 
+## A substituting mutant finds the lazy fix; an adding one does not
+
+Two mutants were run against the same three tests. One **added** an `invalidate()` call to an event
+that should not have it; the other **replaced** two specific calls with one blanket call at the top.
+Both killed exactly one test — but only the second models what a person does.
+
+**Nobody adds a redundant call. People replace two specific things with one general thing that
+looks tidier.** So a mutant that adds tests whether the suite notices *extra behaviour*; a mutant
+that substitutes tests whether it notices a *plausible wrong design*, and the second is where the
+lazy fix actually lives.
+
+It changed what one test was worth. Under the adding mutant, the negative test — *an edit changes
+no filename, so the cache must survive* — read as thoroughness. Under the substituting mutant it is
+the **only** thing standing between the suite and a change that satisfies every other assertion
+while discarding the file list on the most frequent event the app handles.
+
+The rule: **mutate toward the mistake someone would actually make**, not toward the smallest edit
+the code admits. Ask what the tidier-looking version of this code would be, and write that.
+
+## A generalisation is filed by whoever paid for it
+
+Four conventions this week came from QA, each from an error they had caught in their own work. The
+fifth was available on the same evidence and they handed it over, for a reason worth keeping:
+**a rule derived from someone else's finding, while it is still warm, is a different act with the
+same shape.** It produces rules nobody can trace back to an incident — plausible, unattributable,
+and impossible to re-examine later, because the person who writes it has no failure of their own to
+check it against.
+
+The convention above was handed over on exactly that ground and filed by the person whose code
+produced the instance. The test is not who noticed the pattern; it is who has the incident.
+
 ## When something can't be tested, check its signature before blaming its location
 
 Three functions in `commands.rs` and `watcher.rs` had no tests, and the reason was identical in all
