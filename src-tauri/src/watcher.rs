@@ -17,7 +17,7 @@ use std::time::Duration;
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::atomic::is_staging_file;
 use crate::document::{ContentHash, DocumentStore, ExternalChange};
@@ -272,6 +272,54 @@ struct DocumentRemovedPayload {
 /// **A shell contains no decisions** (architecture.md §2). Every branch here is on a
 /// `WatcherEvent` variant, and each arm does only I/O — the variant already carries the decision.
 /// Anything that needs a reason belongs in `decide`, which can be tested.
+/// What one decided event obliges the shell to do.
+///
+/// Extracted from `run_event_loop`'s body for one reason: **the loop could not be tested, so the
+/// wiring inside it was not.** QA disabled `FileIndex::invalidate()` and all 156 tests passed --
+/// the method has a test, the decision to emit `TreeChanged` has a test, and nothing asserted
+/// that the loop connects them. Delete either call and quick-open silently serves a stale file
+/// list after a create or delete, with a green suite.
+///
+/// That is the same shape as the field bug this release fixes -- both ends built and tested, the
+/// wire between them not -- one consumer over. It is milder, because a stale quick-open list is
+/// visible and recoverable where a tree that never updates was neither. It is the same belief
+/// though: *the shell's actions are inspectable, so they need no test.* That belief is what cost
+/// us the tree.
+///
+/// Generic over the runtime so `mock_builder` can call it, the same reason `document_read` and
+/// `rescope_workspace` are. A function the test harness cannot construct an argument for is
+/// untestable by construction, which is why all three had no coverage.
+///
+/// **`TreeChanged` has two obligations, not one**, and they must be able to fail independently:
+/// the event tells the frontend to reload its tree *and* tells the file index its cache is void.
+/// Covering them together would reproduce, in the tests, exactly the coupling that hid the bug.
+fn apply<R: Runtime>(app: &AppHandle<R>, event: WatcherEvent) {
+    match event {
+        WatcherEvent::DocumentChanged {
+            path,
+            content,
+            hash,
+        } => {
+            let _ = app.emit(
+                "document:changed-on-disk",
+                DocumentChangedPayload {
+                    path,
+                    content,
+                    hash,
+                },
+            );
+        }
+        WatcherEvent::DocumentRemoved { path } => {
+            let _ = app.emit("document:removed-on-disk", DocumentRemovedPayload { path });
+            app.state::<FileIndex>().invalidate();
+        }
+        WatcherEvent::TreeChanged => {
+            let _ = app.emit("tree:changed", ());
+            app.state::<FileIndex>().invalidate();
+        }
+    }
+}
+
 pub fn run_event_loop(rx: mpsc::Receiver<DebounceEventResult>, app: AppHandle) {
     for result in rx {
         let Ok(events) = result else { continue };
@@ -285,30 +333,7 @@ pub fn run_event_loop(rx: mpsc::Receiver<DebounceEventResult>, app: AppHandle) {
             .map(|ws| ws.root().to_path_buf());
 
         for event in decide(&events, workspace_root.as_deref(), &store) {
-            match event {
-                WatcherEvent::DocumentChanged {
-                    path,
-                    content,
-                    hash,
-                } => {
-                    let _ = app.emit(
-                        "document:changed-on-disk",
-                        DocumentChangedPayload {
-                            path,
-                            content,
-                            hash,
-                        },
-                    );
-                }
-                WatcherEvent::DocumentRemoved { path } => {
-                    let _ = app.emit("document:removed-on-disk", DocumentRemovedPayload { path });
-                    app.state::<FileIndex>().invalidate();
-                }
-                WatcherEvent::TreeChanged => {
-                    let _ = app.emit("tree:changed", ());
-                    app.state::<FileIndex>().invalidate();
-                }
-            }
+            apply(&app, event);
         }
     }
 }
@@ -822,7 +847,10 @@ mod tests {
         // 1. A recursive root covers its subdirectories.
         w.watch_recursive(root.path()).unwrap();
         assert!(w.covers(root.path()), "the root itself");
-        assert!(w.covers(&nested), "a subdirectory of a RECURSIVE root is covered");
+        assert!(
+            w.covers(&nested),
+            "a subdirectory of a RECURSIVE root is covered"
+        );
 
         // 2. A non-recursive watch covers only its own directory.
         w.watch_non_recursive(loose.path()).unwrap();
@@ -836,11 +864,105 @@ mod tests {
         // 3. Unwatching removes the bookkeeping, not just the OS watch. A stale entry here is the
         //    same silent failure as the bug this replaced.
         w.unwatch(root.path());
-        assert!(!w.covers(root.path()), "unwatched root must stop counting as covered");
+        assert!(
+            !w.covers(root.path()),
+            "unwatched root must stop counting as covered"
+        );
         assert!(
             !w.covers(&nested),
             "and so must everything under it -- a stale recursive root would swallow every \
              document beneath a folder that is no longer watched"
+        );
+    }
+}
+
+#[cfg(test)]
+mod shell_wiring {
+    //! Does the loop actually *do* what a decided event obliges? `decide` was tested, and
+    //! `FileIndex::invalidate` was tested, and nothing asserted that one calls the other --
+    //! disabling the call left all 156 tests green. Both ends built and tested, the wire between
+    //! them not: the field bug's shape, one consumer over.
+    use super::*;
+    use crate::quickopen::FileIndex;
+
+    /// Populates the index so it has a cache to lose, then returns whether `apply` voided it.
+    /// Asserting on the *cache* rather than on a flag is deliberate: the stale list is the thing
+    /// a user would meet, and a flag could be set while the cache survived.
+    fn cache_survives_after(event: WatcherEvent, root: &Path) -> bool {
+        let app = tauri::test::mock_builder()
+            .manage(FileIndex::new())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app builds");
+
+        let index = app.state::<FileIndex>();
+        let before = index.files(root).len();
+        assert_eq!(
+            before, 1,
+            "the index must be warm, or this measures nothing"
+        );
+
+        // Appears on disk without the index being told -- exactly how a create reaches medd.
+        std::fs::write(root.join("b.md"), "x").unwrap();
+        assert_eq!(
+            index.files(root).len(),
+            1,
+            "the cache must actually be stale before the event, or invalidation is unobservable"
+        );
+
+        apply(app.handle(), event);
+
+        index.files(root).len() == 1
+    }
+
+    fn warm_root() -> tempfile::TempDir {
+        let dir = tempfile::Builder::new()
+            .prefix("medd-shell-wiring-")
+            .tempdir()
+            .unwrap();
+        std::fs::write(dir.path().join("a.md"), "x").unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_tree_change_voids_the_quick_open_cache() {
+        let dir = warm_root();
+        assert!(
+            !cache_survives_after(WatcherEvent::TreeChanged, dir.path()),
+            "a created file must not stay invisible to quick-open; this is TreeChanged's second \
+             obligation, and the frontend event is the first"
+        );
+    }
+
+    #[test]
+    fn a_document_removal_voids_the_quick_open_cache() {
+        let dir = warm_root();
+        assert!(
+            !cache_survives_after(
+                WatcherEvent::DocumentRemoved {
+                    path: dir.path().join("a.md"),
+                },
+                dir.path()
+            ),
+            "a deletion must not leave the removed file offerable in quick-open"
+        );
+    }
+
+    #[test]
+    fn a_document_change_leaves_the_cache_alone() {
+        // The negative, which is what stops the two above passing under a blanket "invalidate on
+        // everything". Content changing alters no filename, so re-walking the tree would be work
+        // for nothing on the most frequent event medd handles.
+        let dir = warm_root();
+        assert!(
+            cache_survives_after(
+                WatcherEvent::DocumentChanged {
+                    path: dir.path().join("a.md"),
+                    content: "x".to_string(),
+                    hash: ContentHash::of(b"x"),
+                },
+                dir.path()
+            ),
+            "an edit changes no filename, so the file list must not be thrown away"
         );
     }
 }
