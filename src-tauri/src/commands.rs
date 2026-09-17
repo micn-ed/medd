@@ -104,8 +104,8 @@ pub fn workspace_open(
 /// the time this takes the watcher lock), matching `document_read`'s — the only other site that
 /// takes both. Keeping that order consistent is what rules out an AB/BA deadlock between them; a
 /// third site taking both locks should follow the same order rather than inventing its own.
-fn rescope_workspace(
-    app: &AppHandle,
+fn rescope_workspace<R: Runtime>(
+    app: &AppHandle<R>,
     watcher: &Mutex<FsWatcher>,
     old_root: Option<PathBuf>,
     new_root: PathBuf,
@@ -113,7 +113,23 @@ fn rescope_workspace(
     let scope = app.asset_protocol_scope();
     let mut fs_watcher = watcher.lock().unwrap();
     if let Some(old_root) = &old_root {
-        let _ = scope.forbid_directory(old_root, true);
+        // **No `forbid_directory` here, deliberately.** It reads as the counterpart to the grant
+        // below and is not one: `FsScope`'s four mutators all push onto monotonic sets -- nothing
+        // in the type removes from either -- and `is_allowed` checks the forbidden patterns first,
+        // returning `false` on a match without ever consulting the allow list. A forbid is
+        // therefore permanent and outranks every later grant.
+        //
+        // Calling it here made revisiting a workspace break it for the rest of the process: open
+        // `/a`, switch to `/c`, switch back to `/a`, and the re-grant on the next line is
+        // outranked by the standing forbid, so every image in that folder stays unreadable until
+        // medd restarts. Under D-4 and I-3 -- an editor open for days -- returning to a folder is
+        // ordinary use. `asset_scope_revocation` pins this.
+        //
+        // The consequence, recorded rather than hidden: the old root stays readable. That is the
+        // scope being monotonic, which it already was; see architecture.md §11 for the bound and
+        // for why the CSP, not this scope, is what keeps a wider read from becoming an exfiltration
+        // path. A boundary that tightens on close cannot be built from this API at all, which is a
+        // specification question and not something this call site can fix by being more careful.
         fs_watcher.unwatch(old_root);
     }
     let _ = scope.allow_directory(&new_root, true);
@@ -444,6 +460,107 @@ mod wire_format {
             json.contains(r#""content":"x""#) && json.contains(r#""hash":"#),
             "{json}"
         );
+    }
+}
+
+#[cfg(test)]
+mod asset_scope_revocation {
+    //! `forbid_directory` is not a release. `FsScope`'s four mutators all *push* onto one of two
+    //! monotonic `HashSet<Pattern>`s -- verified against tauri-2.11.5's `src/scope/fs.rs`, whose
+    //! only `remove` call is on event listeners -- and `is_allowed` checks `forbidden_patterns`
+    //! first, returning `false` on a match **without consulting the allow list**.
+    //!
+    //! So a forbid is permanent and beats every later grant. `rescope_workspace` uses it as the
+    //! counterpart to `allow_directory`, which makes revisiting a workspace break it for the rest
+    //! of the process. Under D-4 and I-3 -- an editor that stays open for days -- switching back
+    //! to a folder you had open earlier is ordinary use, not an edge case.
+    use super::*;
+    use tauri::Manager;
+
+    #[test]
+    fn a_forbid_is_permanent_and_outranks_every_later_grant() {
+        let dir = tempfile::Builder::new()
+            .prefix("medd-scope-")
+            .tempdir()
+            .unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let image = root.join("img.png");
+        std::fs::write(&image, b"not really a png").unwrap();
+
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app builds");
+        let scope = app.asset_protocol_scope();
+
+        // Open the workspace: readable, as it must be.
+        scope.allow_directory(&root, true).unwrap();
+        assert!(
+            scope.is_allowed(&image),
+            "a freshly opened workspace's files must be readable -- if this fails the test proves \
+             nothing about what follows"
+        );
+
+        // Switch away. This is what `rescope_workspace` does today.
+        scope.forbid_directory(&root, true).unwrap();
+        assert!(!scope.is_allowed(&image), "forbidding takes effect");
+
+        // Re-grant the very same root, exactly as reopening the workspace would.
+        scope.allow_directory(&root, true).unwrap();
+
+        assert!(
+            !scope.is_allowed(&image),
+            "the re-grant is INEFFECTIVE: a forbid is permanent and outranks every later grant, \
+             which is the library property that makes `forbid_directory` unusable as a release \
+             and the reason `rescope_workspace` must never call it. If this ever starts passing, \
+             FsScope has gained real revocation and the design built around its absence should be \
+             revisited."
+        );
+    }
+
+    #[test]
+    fn switching_workspace_and_returning_leaves_the_first_one_readable() {
+        // The behavioural claim, against the real function rather than against `FsScope`. The
+        // test above establishes *why* this could fail; this one establishes that it does not.
+        // Both are needed: the first would keep passing if `rescope_workspace` were reverted, and
+        // the second would keep passing if it were never written.
+        let a = tempfile::Builder::new()
+            .prefix("medd-ws-a-")
+            .tempdir()
+            .unwrap();
+        let c = tempfile::Builder::new()
+            .prefix("medd-ws-c-")
+            .tempdir()
+            .unwrap();
+        let root_a = a.path().canonicalize().unwrap();
+        let root_c = c.path().canonicalize().unwrap();
+        let image = root_a.join("img.png");
+        std::fs::write(&image, b"not really a png").unwrap();
+
+        let (fs_watcher, _rx) = FsWatcher::new().unwrap();
+        let app = tauri::test::mock_builder()
+            .manage(Mutex::new(fs_watcher))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app builds");
+        let watcher = app.state::<Mutex<FsWatcher>>();
+
+        rescope_workspace(app.handle(), &watcher, None, root_a.clone());
+        assert!(
+            scope_allows(&app, &image),
+            "the first workspace opens readable"
+        );
+
+        rescope_workspace(app.handle(), &watcher, Some(root_a.clone()), root_c.clone());
+        rescope_workspace(app.handle(), &watcher, Some(root_c), root_a.clone());
+
+        assert!(
+            scope_allows(&app, &image),
+            "returning to a workspace must leave it readable; a permanent forbid on the way out \
+             would make every image in it dead until restart"
+        );
+    }
+
+    fn scope_allows<R: Runtime>(app: &tauri::App<R>, path: &std::path::Path) -> bool {
+        app.asset_protocol_scope().is_allowed(path)
     }
 }
 
