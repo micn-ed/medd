@@ -28,27 +28,69 @@ const COALESCE_WINDOW: Duration = Duration::from_millis(100);
 
 pub struct FsWatcher {
     debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
+    /// Every path handed to `watch_recursive`, and whether a directory below it is therefore
+    /// already attended to. Kept so `covers` can answer *"is this outside whatever we already
+    /// watch"* -- which is the question `document_read` needs, and which nothing else could
+    /// answer: `notify` exposes no way to enumerate its own registrations.
+    ///
+    /// Recursive roots only. A non-recursive watch covers exactly its own directory, so a
+    /// document in it is covered by the entry for that directory itself, which `covers` checks
+    /// by equality below.
+    recursive_roots: Vec<PathBuf>,
+    non_recursive_dirs: Vec<PathBuf>,
 }
 
 impl FsWatcher {
     pub fn new() -> notify::Result<(Self, mpsc::Receiver<DebounceEventResult>)> {
         let (tx, rx) = mpsc::channel();
         let debouncer = new_debouncer(COALESCE_WINDOW, None, tx)?;
-        Ok((FsWatcher { debouncer }, rx))
+        Ok((
+            FsWatcher {
+                debouncer,
+                recursive_roots: Vec::new(),
+                non_recursive_dirs: Vec::new(),
+            },
+            rx,
+        ))
+    }
+
+    /// Whether `dir` is already attended to -- inside a recursive root, or itself a directory
+    /// already watched non-recursively.
+    ///
+    /// **This is the condition the missing-reload bug turned on.** `document_read` used to ask
+    /// *"is a workspace open and is this outside it"*, which with no workspace open answered
+    /// `false` because the `Option` was `None` rather than because of anything about the path --
+    /// so a file opened from Finder, the CLI or Neovim with no folder open was never watched at
+    /// all. Asking what is actually watched makes the no-workspace case an instance of the
+    /// general rule instead of a case that fell through it: with nothing watched, every document
+    /// is outside the set.
+    ///
+    /// It also stops the fix from being wasteful. Always watching a document's directory would
+    /// register a redundant watch for every in-workspace file, and since watches are not released
+    /// (architecture.md §6) that set would grow for the life of the process.
+    pub fn covers(&self, dir: &Path) -> bool {
+        self.recursive_roots.iter().any(|r| dir.starts_with(r))
+            || self.non_recursive_dirs.iter().any(|d| d == dir)
     }
 
     pub fn watch_recursive(&mut self, path: &Path) -> notify::Result<()> {
-        self.debouncer.watch(path, RecursiveMode::Recursive)
+        self.debouncer.watch(path, RecursiveMode::Recursive)?;
+        self.recursive_roots.push(path.to_path_buf());
+        Ok(())
     }
 
     pub fn watch_non_recursive(&mut self, path: &Path) -> notify::Result<()> {
-        self.debouncer.watch(path, RecursiveMode::NonRecursive)
+        self.debouncer.watch(path, RecursiveMode::NonRecursive)?;
+        self.non_recursive_dirs.push(path.to_path_buf());
+        Ok(())
     }
 
     /// Best-effort: unwatching a path notify never watched (or already stopped watching) is not
     /// a caller error worth propagating — the net effect either way is "not watched any more".
     pub fn unwatch(&mut self, path: &Path) {
         let _ = self.debouncer.unwatch(path);
+        self.recursive_roots.retain(|r| r != path);
+        self.non_recursive_dirs.retain(|d| d != path);
     }
 }
 

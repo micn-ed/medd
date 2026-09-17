@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
+  import { listen } from '@tauri-apps/api/event'
   import type { TreeEntry } from './index'
   import Self from './Tree.svelte'
 
@@ -18,6 +19,27 @@
   }
 
   load()
+
+  // The backend has emitted `tree:changed` since increment 4 and nothing in the frontend ever
+  // listened for it, so the tree loaded once when it appeared and never again: a file created in
+  // an open folder -- by the user, by git, by anything -- stayed invisible until the folder was
+  // reopened. Both ends were built and tested; the wire between them was never connected.
+  //
+  // Not a refresh button, though one was offered. A button is the larger change: a control, a
+  // label, a place to put it, and a user who has to learn the tree can be wrong and that fixing
+  // it is their job. This is the half-built thing finished.
+  //
+  // Per instance rather than one listener at the root: `Tree` is recursive, one component per
+  // expanded directory, and each reloads only its own level. A single root listener would have to
+  // remount the whole tree and would drop expansion state.
+  $effect(() => {
+    const pending = listen('tree:changed', () => {
+      void load()
+    })
+    return () => {
+      void pending.then((unlisten) => unlisten())
+    }
+  })
 
   function click(entry: TreeEntry) {
     if (entry.kind === 'directory') {
