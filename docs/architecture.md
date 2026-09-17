@@ -895,7 +895,7 @@ in-document anchors scroll.
 not the workspace root — which is what makes loose files (D-15) render correctly. The rewritten
 `src` uses Tauri's asset protocol.
 
-**The scope this protocol is given is monotonic (D-21), and this section used to claim otherwise.**
+**The scope this protocol is given is monotonic (D-17), and this section used to claim otherwise.**
 It previously read *"scoped to the workspace root and to the directories of open loose documents;
 nothing else is readable by the WebView"* — which describes a boundary that tightens when a tab
 closes or a workspace changes. `FsScope` cannot express that: its four mutators all push onto
@@ -922,7 +922,7 @@ leave the machine. This is a **local-read boundary wider than specified, not an 
 path**, and increment 5's two-layer framing is what makes the difference survivable — the first
 layer loose while the second holds. Neither layer substitutes for the other.
 
-**Only one design makes the old sentence true**, and D-21 records it as increment 12's to adopt
+**Only one design makes the old sentence true**, and D-17 records it as increment 12's to adopt
 rather than this build's: grant a stable root once and validate each path against the live
 open-document set before it reaches `asset:` — a check over current state *can* tighten, where a
 scope cannot. Under either design **the grant stays conditional**, because with no revocation a
