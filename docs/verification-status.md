@@ -28,6 +28,30 @@ nobody re-checks a claim that something is not covered.
 
 ---
 
+## The 14-inch width fix is established; that it explains the 14-inch report is not
+
+`a3fc497` removes a real defect, independently reproduced by QA on a different instrument —
+floor 1165/1166 unfixed, 483/484 fixed, and the sidebar's 257px accounted for exactly (unfixed
+floor with the tree open 1165, closed 908). The mechanism is measured, not inferred.
+
+**What is not established is that this is what the CEO saw.** A floor of 1166 only bites below
+1166, and a 14-inch MacBook Pro is 1512pt at default scaling — **346px of headroom** — and 1352pt
+one step up. Neither reaches the floor. It bites at increased text scaling (≈1147pt or below), or
+in any window that is not maximised.
+
+So the report is explained **only if** the reporter was at larger text or in a windowed app. If they
+were at default scaling and full-screen, something else was also wrong, and this fix would have
+made that second thing *harder to see* rather than fixing it — the symptom would change without
+the cause being found.
+
+**Open question, owned by whoever next speaks to the CEO:** at the time of the report, was the
+window full-screen, and was Display set to anything other than the default? Until that is answered
+this is *a fix for a defect we measured*, not *the fix for the defect they reported*, and the
+difference is not cosmetic.
+
+Found by QA, who reproduced the number and then checked whether the number could produce the
+symptom — which are different questions, and only the second one closes the report.
+
 ## 1. The one thing to know first
 
 **A passing suite proves the tests pass. It does not prove they would fail if the code were
