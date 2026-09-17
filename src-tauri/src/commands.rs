@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -145,8 +145,8 @@ pub fn dir_list(
 /// already scoped and watched by `workspace_open`. This is the first real caller of
 /// `Workspace::classify`, which sat tested-but-unused from increment 3 to increment 5.
 #[tauri::command]
-pub fn document_read(
-    app: AppHandle,
+pub fn document_read<R: Runtime>(
+    app: AppHandle<R>,
     path: PathBuf,
     store: State<'_, DocumentStore>,
     workspace: State<'_, Mutex<Option<Workspace>>>,
@@ -185,7 +185,11 @@ pub fn document_read(
 /// Lock order: this only ever takes the watcher lock, and only after `document_read` has already
 /// released the workspace lock — the same workspace-then-watcher order as `rescope_workspace`,
 /// just with the first half finished before this function is even called.
-fn scope_and_watch_loose_document(app: &AppHandle, watcher: &Mutex<FsWatcher>, dir: PathBuf) {
+fn scope_and_watch_loose_document<R: Runtime>(
+    app: &AppHandle<R>,
+    watcher: &Mutex<FsWatcher>,
+    dir: PathBuf,
+) {
     let _ = app.asset_protocol_scope().allow_directory(&dir, false);
     let _ = watcher.lock().unwrap().watch_non_recursive(&dir);
 }
@@ -444,6 +448,125 @@ mod wire_format {
 }
 
 #[cfg(test)]
+mod watching_a_document_opened_without_a_workspace {
+    //! Field report: a document edited externally did not reload. This asks the narrowest
+    //! question that could explain it -- **is anything being watched at all?**
+    //!
+    //! `document_read` registers a watch only when `is_loose`, and `is_loose` is computed with
+    //! `workspace.as_ref().is_some_and(..)`. With no workspace open that is `false` by the
+    //! `Option` being `None`, not by any judgement about the path -- so the watch is skipped for
+    //! a reason that never mentions the document. Opening a file straight from Finder, the CLI or
+    //! Neovim, without opening a folder first, is medd's stated launch path (README) and reaches
+    //! exactly this state.
+    //!
+    //! Asserted by writing to the file from outside and draining the watcher, rather than by
+    //! reading the condition: the question is whether events arrive, and only events answer it.
+    use super::*;
+    use crate::watcher::decide;
+    use std::time::Duration;
+    use tauri::Manager;
+
+    fn drain(
+        rx: &std::sync::mpsc::Receiver<notify_debouncer_full::DebounceEventResult>,
+    ) -> Vec<notify_debouncer_full::DebouncedEvent> {
+        let mut all = Vec::new();
+        while let Ok(Ok(events)) = rx.recv_timeout(Duration::from_millis(500)) {
+            all.extend(events);
+        }
+        all
+    }
+
+    /// Builds a mock app whose workspace state is whatever the caller passes, reads `file`
+    /// through the real command, then edits `file` externally and returns what the watcher saw.
+    fn events_after_external_edit(
+        workspace: Option<Workspace>,
+        file: &std::path::Path,
+    ) -> Vec<crate::watcher::WatcherEvent> {
+        let (fs_watcher, rx) = FsWatcher::new().unwrap();
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![document_read])
+            .manage(DocumentStore::new())
+            .manage(Mutex::new(workspace))
+            .manage(Mutex::new(fs_watcher))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app builds");
+
+        document_read(
+            app.handle().clone(),
+            file.to_path_buf(),
+            app.state::<DocumentStore>(),
+            app.state::<Mutex<Option<Workspace>>>(),
+            app.state::<Mutex<FsWatcher>>(),
+        )
+        .expect("the document reads");
+
+        std::fs::write(file, "edited by another editor").unwrap();
+
+        let store = app.state::<DocumentStore>();
+        decide(&drain(&rx), None, &store)
+    }
+
+    #[test]
+    fn a_document_opened_with_no_workspace_is_never_watched() {
+        let dir = tempfile::Builder::new()
+            .prefix("medd-loose-watch-")
+            .tempdir()
+            .unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("note.md");
+        std::fs::write(&file, "v1").unwrap();
+
+        let events = events_after_external_edit(None, &file);
+
+        // Characterises the defect rather than the fix: this is what medd does today, and the
+        // report says it is wrong. When the fix lands, this test fails -- and that is the fix
+        // landing, not breakage. Re-aim it then at `contains(DocumentChanged)`.
+        assert!(
+            events.is_empty(),
+            "TODAY: opening a file with no folder open watches nothing, so an external edit is \
+             never noticed. If this now reports events, the gap is closed and this test should \
+             assert the reload instead. Got {events:?}"
+        );
+    }
+
+    #[test]
+    fn the_same_file_is_watched_when_a_workspace_is_open() {
+        // The control, and the test above is worthless without it. `assert!(events.is_empty())`
+        // passes just as happily when the drain is broken, the debounce never fires, or the mock
+        // app never ran the command -- every way of observing nothing looks identical to nothing
+        // happening. This arm changes exactly one input, the workspace, and requires the opposite
+        // result from the same harness.
+        let dir = tempfile::Builder::new()
+            .prefix("medd-loose-watch-")
+            .tempdir()
+            .unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("note.md");
+        std::fs::write(&file, "v1").unwrap();
+
+        // A workspace rooted somewhere else, so `file` classifies as Loose and `document_read`
+        // takes the branch that registers a watch on its directory.
+        let other = tempfile::Builder::new()
+            .prefix("medd-other-root-")
+            .tempdir()
+            .unwrap();
+        let workspace = Workspace::open(other.path()).expect("the other root opens");
+
+        let events = events_after_external_edit(Some(workspace), &file);
+
+        assert!(
+            events.contains(&crate::watcher::WatcherEvent::DocumentChanged {
+                path: file.clone(),
+                content: "edited by another editor".to_string(),
+                hash: crate::document::ContentHash::of(b"edited by another editor"),
+            }),
+            "a loose document IS watched, and this harness can see the events the other test \
+             asserts the absence of; got {events:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod ipc_probe {
     //! PROBE — what can a Rust test actually reach above the IPC boundary?
     use super::*;
@@ -489,7 +612,10 @@ mod picker_reachability {
 
         let windows = app.webview_windows();
         println!("PROBE webview_windows = {}", windows.len());
-        println!("PROBE window names     = {:?}", windows.keys().collect::<Vec<_>>());
+        println!(
+            "PROBE window names     = {:?}",
+            windows.keys().collect::<Vec<_>>()
+        );
         // Can we even obtain a dialog handle?
         let _ = &app;
         println!("PROBE dialog plugin initialised without panicking");

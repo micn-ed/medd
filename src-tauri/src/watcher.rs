@@ -531,6 +531,54 @@ mod tests {
             "a foreign write is exactly one notification, and no tree change"
         );
     }
+
+    #[test]
+    fn an_external_atomic_replace_is_also_exactly_one_document_changed() {
+        // The test above says "Neovim" and writes in place. Neovim, by default, does not: it
+        // writes a temp file and `rename`s it over the target, so the path survives and the
+        // **inode does not**. Every editor using the write-temp-then-rename idiom -- which is
+        // most of them, because it is the crash-safe one, and the same idiom `document.rs` uses
+        // for medd's own writes -- produces this shape rather than the one covered above.
+        //
+        // A watcher registered on the *file* would go deaf here: its registration follows the
+        // inode, which the rename detaches and discards. `watch_recursive` on the workspace root
+        // is what makes this survivable, and nothing before this test established that it does.
+        let dir = tempfile::Builder::new()
+            .prefix("medd-watcher-test-")
+            .tempdir()
+            .unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("note.md");
+        std::fs::write(&file, "v1").unwrap();
+
+        let store = DocumentStore::new();
+        store.read(&file).unwrap();
+
+        let (mut watcher, rx) = FsWatcher::new().unwrap();
+        watcher.watch_recursive(&root).unwrap();
+
+        // Exactly what an atomic-saving editor does: new inode, renamed over the old path.
+        let staging = root.join("note.md~");
+        std::fs::write(&staging, "v2 by atomic replace").unwrap();
+        std::fs::rename(&staging, &file).unwrap();
+
+        let events = decide(&drain(&rx), Some(&root), &store);
+
+        // Asserts the *reload*, not the event count. The first draft demanded exactly one event
+        // and failed on a second, `TreeChanged` -- which is correct here and not noise: the
+        // staging file really did appear in the directory and really did vanish, so the tree
+        // genuinely changed. Demanding one event would have pinned an incidental consequence of
+        // how this editor saves, and broken on the next editor that stages its temp file
+        // somewhere else.
+        assert!(
+            events.contains(&WatcherEvent::DocumentChanged {
+                path: file.clone(),
+                content: "v2 by atomic replace".to_string(),
+                hash: ContentHash::of(b"v2 by atomic replace"),
+            }),
+            "an atomic replace must reload like any other external edit; got {events:?}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -556,9 +604,13 @@ mod wire_format {
 
     #[test]
     fn removed_payload_fields_are_what_doc_ts_reads() {
-        let json =
-            serde_json::to_string(&DocumentRemovedPayload { path: PathBuf::from("/w/a.md") })
-                .unwrap();
-        assert!(json.contains(r#""path":"#), "doc.ts reads payload.path: {json}");
+        let json = serde_json::to_string(&DocumentRemovedPayload {
+            path: PathBuf::from("/w/a.md"),
+        })
+        .unwrap();
+        assert!(
+            json.contains(r#""path":"#),
+            "doc.ts reads payload.path: {json}"
+        );
     }
 }
