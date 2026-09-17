@@ -91,6 +91,34 @@ makes reading mode genuinely full-width.
 **Rejected: single-file-at-a-time.** Simpler, but leaves the app with nothing to be resident
 *about*, and makes the file tree requirement awkward.
 
+**Amendment (2026-09-17) — one correction and one decision, and they are separate things.**
+
+**The correction: "collapsing the tree is what makes reading mode genuinely full-width" stopped
+being true in increment 6**, when the reading measure was capped. Reading mode is not full-width;
+it is a **522px centred column**. Measured at every window size medd ships in — 14-inch, 16-inch,
+and narrow — the column is 522px with the sidebar shown *and* hidden, and is constrained only below
+a 762px window, against a 1000px default. **The sidebar costs reading mode's text nothing.** It only
+shifts where the column sits. The sentence was plausible when written, because reading mode was
+conceived as full-width and became a capped column later, and nobody revisited it. Wrong for six
+increments.
+
+**The decision: the CEO has ruled that reading mode keeps the sidebar.** What that overrules is not
+the full-width mechanism above — that was already void — but the *visual-quiet* argument, which
+stands on its own terms: a tree in peripheral vision is a real distraction even when it costs the
+column nothing. That argument is now overruled by the person who owns product decisions.
+
+**And reading mode loses less than the original framing implies.** It does four things, three of
+them typographic — a serif face, 17px, and the 50ch centred column, none of which split view
+applies. Hiding the chrome was one distinction of four, and the only one that took something *away*
+from the user. Reading mode is a **typographic** mode: the document set as a page rather than as a
+pane.
+
+**The cost, recorded because it is what the old behaviour was for:** reading quietly and then
+returning to editing with the tree now costs two toggles where it cost zero. A per-mode memory flag
+would restore that and is **refused** — it puts two questions back into one piece of state, which is
+exactly the coupling that produced the sidebar bug. If the zero-toggle workflow is wanted back it
+needs its own decision about per-mode layout memory, not a quiet re-coupling of this one.
+
 **Rejected: multi-root workspaces.** VS Code-style multiple roots is real power, but it is
 scope the user did not ask for and complicates the tree, quick-open, and link resolution.
 
