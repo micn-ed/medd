@@ -99,6 +99,30 @@ test claiming to cover an editor's save strategy performs that strategy**, or na
   responsible for which behaviour. I will verify each independently, against its own criterion,
   before looking at the pair.
 - **The `is_loose` fix touches `document_read`**, which is where the lock-across-syscall hazard
-  lived and where the workspace guard is copied out. `no lock is held across a filesystem or OS
-  call` is an architecture invariant now; a new watch registration is exactly the kind of OS call
-  that would violate it. I will check the guard is still released before the call.
+  lived. The design now removes that site rather than navigating it — if the watch always targets
+  the document's own directory, that directory comes from the path and never consults the
+  workspace. **The half to check afterwards is the other one:** `scope_and_watch_loose_document`
+  does two things, and the asset-protocol grant may still want to know whether the path is inside
+  the workspace. If it does, the lock question survives on that half alone, and the plain-`let`
+  discipline has to survive with it.
+
+### Raised while the design is open: always-watching has an unbounded set behind it
+
+Today **nothing ever releases a loose document's watch or its scope grant.** `workspace_open`
+balances its own pair — `forbid_directory` + `unwatch` on the old root — but `document_read`'s
+grant at `commands.rs:193` and its `watch_non_recursive` have no counterpart anywhere: not on tab
+close, not on workspace switch, not on quit. Today that is bounded by how many *loose* documents
+one session opens, which under D-15 is a handful.
+
+**If the watch becomes unconditional, that set becomes every directory a file was ever opened
+from** — and for in-workspace documents each one is **redundant with the recursive root watch that
+already covers it.** So the cost is an FSEvents watch and a scope entry per directory visited,
+buying nothing, never released, for the lifetime of a session medd is designed to leave running for
+days (I-3, N-1).
+
+Not a correctness problem, and I checked: a second watch on the same file does not produce a
+duplicate notification, because `check_external_change` updates `last_known` when it reports, so
+the second batch finds the hash already current and returns `None`. It is a resource question, and
+the answer belongs in the design rather than in a later memory-growth investigation.
+
+**Criterion either way: whatever set the fix grows, say what bounds it.**
