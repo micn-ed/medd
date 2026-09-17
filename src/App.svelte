@@ -66,11 +66,11 @@
   let tab = $derived(activeTab())
   let documentDir = $derived(tab ? dirname(tab.path) : '')
   // `sidebar.ts`'s own header explains why `visible` is defined in terms of `showToggle` rather
-  // than as a second, separately-repeated condition: that's what keeps a control that's present
-  // but does nothing (reading mode) from becoming possible again the next time a condition is
-  // added to one but not the other.
+  // than as a second, separately-repeated condition, and why that two-line function is worth
+  // keeping as one: it is what stops a control that is present but does nothing from becoming
+  // possible again the next time a condition is added to one and not the other.
   let { visible: sidebarVisible, showToggle: showSidebarToggle } = $derived(
-    sidebarLayout(workspaceRoot, sidebarHiddenByUser, tab?.viewMode),
+    sidebarLayout(workspaceRoot, sidebarHiddenByUser),
   )
 
   function formatError(e: unknown): string {
