@@ -963,3 +963,27 @@ merges, **while still reading as current**.
   noticed immediately. Every one of those commands is a write to a tree that belongs to whoever is
   mid-increment. If you need a pristine checkout, copy the repository somewhere else and work
   there — which costs seconds and cannot take anything from anyone.
+
+- **A missing deliverable is invisible to every review that looks at the change.** Increment 10
+  merged with `scripts/medd` and `make install-cli` absent. Nothing was wrong with the diff, the
+  merge message, or the tests — all of them described what *did* land, accurately. The absence was
+  of a file nobody edited, so it appeared in no diff, contradicted no test, and left the merge
+  reading as complete. It was found only by checking the increment against its **criteria** rather
+  than against its changes.
+
+  This is a different failure from a bad change, and the usual instruments are all shaped for bad
+  changes: a diff shows what moved, a test suite covers what exists, a review reads what was
+  written. None of them has a place to put *the thing that isn't there*. The one instrument that
+  does is a list written **before** the work, because only that list mentions items independently
+  of whether anyone produced them.
+
+  So: **when an increment lands, check it against its definition of done, not against its diff.**
+  And when the check is "is X present", say so as a criterion rather than assuming X will be
+  noticed by its absence — it will not be.
+
+  The companion case is the same shape one level down: a claim can travel without its evidence.
+  `verification-status.md` cited a probe result as established while the probe itself sat on an
+  unmerged branch. The claim was accurate, current, and exactly as broad as its evidence — and the
+  evidence was not in the repository, which reads identically to a verified claim from the outside.
+  **Check that what you cite actually landed**, especially when it landed by a different route than
+  the thing citing it.
