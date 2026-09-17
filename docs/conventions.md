@@ -625,6 +625,28 @@ than remaining load-bearing. If it stays load-bearing, the underlying duplicatio
 
 ---
 
+## A clean reproduction is when you are least inclined to keep asking
+
+Filed as a caution rather than a rule, in the terms the person who noticed it asked for — it does
+not reduce to a step you can add to a checklist.
+
+QA re-measured the width fix on a different instrument and got 483 against 484, and 1165 against
+1166. That degree of agreement is an invitation to stop: the number is confirmed, the mechanism
+looks confirmed with it, and there is no visible loose end to pull. It was only on going looking
+for something *else* to check that the real gap surfaced — a floor of 1166 cannot bite a screen
+that is 1512 wide, so the measurement was right and the story built on it was not established.
+
+**Reproducing a number and establishing that the number explains the symptom are different acts**,
+and confidence in the first does not transfer to the second. From the inside they are hard to tell
+apart, because a clean reproduction feels like the end of the enquiry rather than the middle of it.
+Three rounds of increasingly precise measurement made the leader *more* sure of a causal claim that
+none of the three rounds had tested.
+
+The practical residue is small and worth saying anyway: when a reproduction comes back clean, the
+next question is not "is the number right" but **"could this number produce what was reported?"** —
+and if the answer needs a condition to hold (a display setting, a window state, a document shape),
+that condition is an open question with an owner, not an assumption.
+
 ## An honest number degrades one generous reading at a time
 
 A carefully honest figure — *three of four links established* rather than *"it's unverified"* — is
