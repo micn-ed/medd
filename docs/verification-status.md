@@ -288,9 +288,14 @@ writes to disk, so the last link stays out of reach. Increment 10's CLI closes t
 plugin, `RunEvent::Opened`, `frontend_ready`, `route_open`, the pending-open buffer, activation —
 but **`scripts/medd` and `make install-cli` did not**. `scripts/` contains only `mutants.sh`, and
 the Makefile has only `dev` and `build`. So there is still no way to open a document without
-clicking, which is the single thing the gesture was blocked on. The gate is unchanged and the
-reason is now specific: not "the harness can't reach it" but "the shim that would make it
-keyboard-only has not been written.
+clicking, which is the single thing the gesture was blocked on.
+
+**It is written, though — just not pushed.** `scripts/medd`, `make install-cli` and a
+`test-shim.sh` sit uncommitted in dev's worktree, which has not moved since 2026-09-15 because
+dev's own user paused them pending an explicit go-ahead. So the instruction this creates is
+*recover and land the existing work*, not *write the shim* — materially different, and worth
+knowing before anyone reimplements it. The gate is unchanged either way; what changed is that its
+reason is specific rather than general.
 
 *(This paragraph said "nothing can emit `app:before-quit`" for a while after §2's identical claim
 was corrected — the same sentence, fixed in one place and left standing in another. Recorded
