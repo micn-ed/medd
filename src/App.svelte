@@ -29,6 +29,7 @@
     waitForQuiescence,
     isQuitInProgress,
   } from './doc'
+  import { initLaunchRouting } from './launch'
 
   initDocSync()
 
@@ -84,12 +85,10 @@
     return String(e)
   }
 
-  async function pickFolder() {
+  async function openWorkspace(path: string) {
     error = ''
-    const picked = await invoke<string | null>('workspace_pick')
-    if (!picked) return
     try {
-      const info = await invoke<WorkspaceInfo>('workspace_open', { path: picked })
+      const info = await invoke<WorkspaceInfo>('workspace_open', { path })
       // A new workspace's tree has no relationship to whatever was open before.
       closeAllTabs()
       workspaceRoot = info.root
@@ -97,6 +96,12 @@
     } catch (e) {
       error = formatError(e)
     }
+  }
+
+  async function pickFolder() {
+    const picked = await invoke<string | null>('workspace_pick')
+    if (!picked) return
+    await openWorkspace(picked)
   }
 
   async function openFile(path: string) {
@@ -127,6 +132,18 @@
     if (view) registerMountedView(path, view)
     else unregisterMountedView(path)
   }
+
+  // The CLI, Finder, and a cold launch of medd itself all converge here (plan-v0.1.md
+  // increment 10, ADR-003) — see launch.ts for why this is a thin call into a tested module
+  // rather than logic living in the component itself.
+  void initLaunchRouting({
+    openWorkspace,
+    openFile,
+    hasWorkspace: () => workspaceRoot !== null,
+    reportErrors: (errors) => {
+      error = errors.map(formatError).join('; ')
+    },
+  })
 </script>
 
 <QuickOpenDialog onOpenFile={openFile} />
@@ -153,8 +170,16 @@
 
     <main class="content">
       {#if error}
-        <p class="error">{error}</p>
-      {:else if tab}
+        <!-- A banner above the tab UI, not a replacement for it (architecture.md §9): a launch
+             error for one bad path must not hide every other document already open. -->
+        <p class="error" role="alert">
+          {error}
+          <button class="dismiss-error" onclick={() => (error = '')} aria-label="Dismiss error"
+            >×</button
+          >
+        </p>
+      {/if}
+      {#if tab}
         <TabBar
           tabs={allTabs()}
           activePath={activeTabPath()}
@@ -354,7 +379,22 @@
   }
 
   .error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
     color: var(--error, #c0392b);
-    padding: 1rem;
+    padding: 0.75rem 1rem;
+    flex-shrink: 0;
+  }
+
+  .dismiss-error {
+    font: inherit;
+    line-height: 1;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 0.25em;
   }
 </style>
