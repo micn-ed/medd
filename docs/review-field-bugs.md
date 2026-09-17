@@ -60,7 +60,8 @@ both, and the conditions are not the same:
 - A **watch** may be released when no open document needs that directory. Releasing it wrongly
   costs P-3 — a Must — and fails silently.
 - An **asset scope** may be released on the same condition, but releasing it wrongly costs R-4, a
-  *Should*: images stop rendering, visibly.
+  *Should*: images stop rendering, visibly. (**Superseded by the second amendment**: an asset scope
+  cannot be released at all. The split survives; this reason for it was too kind to the API.)
 
 Welded on the grant side, they will be assumed welded on the revoke side, and the first person to
 get the shared release condition slightly wrong takes out a Must while believing they were
@@ -232,6 +233,118 @@ sit unexplained beside a consumer that cannot fail: an emit fails essentially on
 exists — during shutdown, or after the window is destroyed — where discarding is exactly right.
 Unexplained, it reads as carelessness in the one place the leader already noticed nothing would
 notice.
+
+---
+
+## Second amendment — the scope grant cannot be released, and that is the ruling
+
+Both of you converged on QA's watch condition and I had arrived there too, so take that as
+settled from three directions. The unwelding question is the one with teeth, and answering it
+turned up a shipped defect that decides it.
+
+### The finding first, because the rulings rest on it
+
+**`FsScope` has no removal API.** Its only mutators are `allow_directory`, `allow_file`,
+`forbid_directory`, `forbid_file` — all four *push* onto one of two `HashSet<Pattern>`s, and
+nothing in the type ever removes from either (`tauri-2.11.5/src/scope/fs.rs`). Both sets are
+monotonic for the life of the process. `is_allowed` (fs.rs:419) checks `forbidden_patterns`
+first and returns `false` on a match without consulting the allow list at all.
+
+So a grant cannot be revoked, and a forbid cannot be lifted. The only available "release" is a
+forbid, which is permanent and beats every later grant.
+
+**This is already a defect in `rescope_workspace`, today, with neither fix applied.**
+`forbid_directory(old_root, true)` (commands.rs:116) pushes the patterns `old_root` and
+`old_root/**`. I measured those against the scope's own glob options
+(`require_literal_separator: true`): `/a/**` matches `/a/img.png` **true** and `/a/b/img.png`
+**true**. Therefore:
+
+- Open workspace `/a`, switch to `/c`, switch back to `/a`. Line 119 re-grants `/a` and `/a/**`
+  as allowed — and `/a/**` is still forbidden, so **every image in that workspace is
+  unreadable for the rest of the process.** Restart is the only repair.
+- A loose document open at `/a/b/note.md` when the workspace moves off `/a` loses its images
+  permanently, and re-opening the tab cannot repair it: the repair path only calls
+  `allow_directory`.
+
+Under D-4 and I-3 — an app expected to stay open for days — revisiting a workspace is ordinary
+use, not an edge. I'd tier this at the severity of the two field bugs and note it is *not* caused
+by either one; it is the pairing we were about to hold up as the model of balance.
+
+That also corrects my own earlier section above: I wrote that a scope "may be released on the
+same condition" as a watch, costing a visible *Should* when released wrongly. Wrong on the
+mechanism. Releasing a scope wrongly is not a visible annoyance; it is unrepairable without a
+restart.
+
+### Ruling 1 — unweld them, and the reason is now structural rather than a preference
+
+My earlier argument was that the two halves have different *revocation conditions*. The stronger
+statement: they have different **revocation possibilities**. `unwatch` is idempotent, restores the
+prior state, and may be called wrongly and then corrected. A scope grant has no inverse.
+
+**A reversible operation and an irreversible one cannot share a lifecycle.** Welding them means
+every future change to the pair's release path is written by someone who has verified it against
+the half that forgives mistakes. Two calls, two names — and the scope one should read, at its call
+site, like something that does not come back.
+
+### Ruling 2 — the watch: QA's condition, and no release path
+
+Condition: *is this path outside whatever we already watch.* Accepted as sent; the `None` case
+becoming the general case is the right shape.
+
+**Release: none. Do not release watches on tab close or workspace switch.** Grounds:
+
+- `unwatch` is path-keyed and can have more than one logical holder. A release on close
+  reintroduces exactly the collision you and I circled twice — and it is reachable: open
+  `/a/b/note.md` with no folder, then open `/a` as the workspace, then close the tab.
+  `unwatch(/a/b)` is now wrong, and under QA's condition the second watch was never taken, so
+  nothing is left covering it.
+- The set QA asked me to bound is: **distinct directories of loose documents opened this
+  session.** D-15 bounds loose documents to a handful, so this is small by construction — and
+  under QA's condition, in-workspace documents never enter it at all.
+
+That is the bound, and it belongs in architecture §6 as a stated bound rather than as an absence.
+If it ever stops being small, the fix is a holder count, not an unwatch on close.
+
+### Ruling 3 — the scope: keeps the workspace, which is where the lock question lands
+
+Your original question 1: **yes, the scope half still wants the workspace root.** Not to decide
+whether to watch, but because *"is this path already inside the granted root"* is the question
+that keeps the stingy half stingy — and it is the only half that must be stingy, since a grant it
+makes wrongly is permanent.
+
+So the watch reads the path and the watch set; the scope reads the path and the workspace root.
+You guessed the lock would land on the scope half and it does — on that half only. It is
+answerable the established way and needs no new care: copy the root out of the guard in one
+`let`, as `workspace_open` already does. The invariant is carried by `rescope_workspace`'s
+signature taking owned values, not by anyone navigating carefully.
+
+### Ruling 4 — the scope's release path does not exist, so the specification is what has to move
+
+This is the part I am ruling *only* halfway, because the other half is yours.
+
+Plan §5's *"nothing wider"* and architecture §11's *"nothing else is readable by the WebView"*
+describe a boundary that **tightens when a tab closes**. Tauri's `FsScope` cannot express that.
+The spec is not merely unimplemented; it is unachievable with the mechanism named to implement
+it. QA found the gap; the missing counterpart is not an oversight anyone can supply.
+
+Two routes are achievable, and choosing between them is a decision, so it is yours:
+
+1. **Relax the specification** to what the mechanism can hold: *the asset scope is the workspace
+   root plus the directories of loose documents opened this session* — monotonic, bounded as in
+   ruling 2, exfiltration closed by the CSP as you established. Cheap, honest, and the second
+   layer of increment 5's framing goes on carrying the weight.
+2. **Stop using the scope as the gate.** Grant a stable root once, and validate each path against
+   the live open-document set before it reaches `asset:` — a check over current state, which
+   *can* tighten. Correct, and a real increment.
+
+I lean 1 for v0.3 and 2 if the increment-12 audit wants the boundary to actually mean what it
+says, because only 2 makes the sentence in §11 true. Either way `forbid_directory` comes out of
+`rescope_workspace` — under route 1 because it is not a release, under route 2 because it is not
+the gate. Removing it is also the fix for the shipped defect above, and that is independent of
+which route you pick, so it need not wait for the decision.
+
+One thing neither route changes: **the grant must stay conditional.** An unconditional grant is
+unrepairable by construction, whichever gate we end up behind.
 
 ---
 
