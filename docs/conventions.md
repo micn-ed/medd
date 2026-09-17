@@ -819,6 +819,36 @@ merges, **while still reading as current**.
   the message and the flag as filenames. Found on the first real use of the rule by someone other
   than its author, which is the usual way an under-specified instruction gets found.
 
+- **A long-lived branch carries the *absence* of every fix landed since it forked, and "take
+  theirs" reinstates them.** A merge conflict shows you two versions of a hunk. It does not show
+  you that one side is simply older — so the side that *adds* the feature, and therefore looks like
+  the authoritative one, is also the side missing everything main learned in the meantime.
+
+  `origin/medd-dev` forked before the folder-picker fix. On main, `workspace_pick` is
+  `#[tauri::command(async)]` and a `command_shape` guard enforces that shape; on the branch it is
+  plain `#[tauri::command]` and still calls `blocking_pick_folder`, and the guard does not exist.
+  Resolving that file the branch's way would have reinstated **the deadlock that hung every copy of
+  medd on every click of Open Folder**, and deleted the only test that notices — in one clean merge,
+  with no conflict marker pointing at either.
+
+  **The two failures are correlated, which is what makes it dangerous.** The guard would catch the
+  reverted attribute instantly, so the bad outcome needs both resolved the same way — and they
+  are both in the same file, so "take theirs for this file" does exactly that. A guard living
+  beside the thing it guards is inside the blast radius of a single resolution decision.
+
+  Resolve by **reconciling hunks, never by taking a side of a file**, and verify the merged result
+  against named invariants rather than against the conflict markers:
+
+  ```
+  grep -c '^#\[tauri::command' commands.rs          # 9 commands
+  grep -c '^#\[tauri::command(async)\]' commands.rs  # 2 async
+  grep -c 'mod command_shape' commands.rs           # guard present
+  ```
+
+  Anchor those on `^#\[`. A bare `grep -c 'command(async)'` returns 6 on main, because the guard's
+  own prose explains the rule it enforces — **the documentation of an invariant inflates the
+  measurement of it**, which is its own small lesson about counting strings instead of structures.
+
 - **A worktree stops others touching your files; it does not tell anyone what you are holding.**
   This is the gap the worktrees left, and it is the read-side counterpart to them. An unmerged
   branch holds hunks in files that look untouched everywhere else: `main` is clean, `git status` is
