@@ -1009,3 +1009,27 @@ merges, **while still reading as current**.
   evidence was not in the repository, which reads identically to a verified claim from the outside.
   **Check that what you cite actually landed**, especially when it landed by a different route than
   the thing citing it.
+
+- **An instrument that silently fails to act reports the null result the experiment exists to
+  detect.** Investigating the width bug produced three of these in a row, each returning a
+  confident, plausible number: a window resize that did not resize, a `2>/dev/null` that hid a
+  failing `git show` and left an empty comparison reading as "identical", and a CSS override that
+  lost on specificity to Svelte's scoped class — so both arms of an A/B measured the same state and
+  returned a tidy, symmetrical, *identical* table. It looked exactly like a clean null result. The
+  kind you would report.
+
+  This is the vacuity family one level out. A vacuous **test** passes because its mechanism never
+  ran; a failed **instrument** reports "no difference found" because its intervention never
+  applied. Both are silent, both look like success, and the instrument version is worse in one
+  respect: a test at least sits in a suite where someone may later mutate it, whereas a measurement
+  is usually taken once, believed, and acted on.
+
+  The fix is cheap and separate from reading the result: **confirm the intervention took effect
+  before trusting the reading.** Read the property back (`getComputedStyle(el).minWidth` must
+  actually say `auto`), assert the resize landed, drop the `2>/dev/null`. And prefer an arm that
+  *proves* itself — an A/B where both arms report what they applied is self-checking in a way that
+  one where both simply report a number is not.
+
+  The tell to watch for: **an experiment whose two arms agree more neatly than the thing being
+  measured should allow.** Agreement is the expected shape of an instrument that did nothing, and
+  it is also the most reassuring shape a result can take.
