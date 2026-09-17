@@ -278,3 +278,15 @@ Collected, because each has been over-read at least once:
 - **`detached-recovery.test.ts` green** means the defect is still present — those are
   characterisation tests asserting current, wrong behaviour, and they go red when it is fixed.
   That is deliberate; do not "fix" them to match a new implementation without reading their header.
+
+And the inverse, because it will be read the wrong way at least as often:
+
+- **"No test" does not mean unverified.** The 14-inch width fix ships with no test *deliberately* —
+  jsdom computes no layout, so an assertion there passes with the declaration removed, which is the
+  vacuous test this project keeps finding. Its evidence is measurement: numbers in the commit
+  message, since reproduced on a different instrument by a second person. That is a stronger
+  position than a green test would have given, **but only because someone actually re-ran them.**
+  Numbers recorded and never reproduced are a claim with more digits, not evidence — so if you meet
+  this pattern again, the obligation it creates is to re-measure, not to trust.
+- The counts above (130/137/22) were current at the commit named at the top and are not maintained.
+  Treat them as *there were about this many*, not as a checksum.
