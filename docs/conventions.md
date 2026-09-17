@@ -829,15 +829,15 @@ either: each was written by someone documenting the thing in front of them, in t
 suggested.
 
 **Restatement does not look like duplication when the words differ.** The eleven divided into three
-vocabularies sharing no phrase — readability (*"nothing else is readable by the WebView"*, *"nothing
-wider"*), watching (*"the parent directory of each open loose document"*, *"drop a loose-file
+vocabularies sharing no phrase — readability (*"nothing else is readable by the WebView"*,
+*"nothing wider"*), watching (*"the parent directory of each open loose document"*, *"drop a loose-file
 watch"*), and revocation (*"revokes it from the old one"*, *"grants are never revoked"*). Every
 sweep was run in one vocabulary and blind to the other two. And a reader who finds sites from two of
 them reads two sources agreeing, not one source twice.
 
-Why the vocabularies existed is worth noticing: the boundary was two constraints — what may be read,
-and what is watched — welded together in the code, so each document described whichever half it
-cared about. **Unwelding them revealed that the eleven sites did not agree on which constraint they
+Why the vocabularies existed is worth noticing: the boundary was two constraints — what may be
+read, and what is watched — welded together in the code, so each document described whichever half
+it cared about. **Unwelding them revealed that the eleven sites did not agree on which constraint they
 were stating.** A restatement can drift from its source; these had also drifted from each other.
 
 Neither a person nor `grep` can distinguish a restatement from an independent claim. That is the
@@ -853,8 +853,8 @@ architecture table row that an earlier review had independently filed as a missi
 documents agreeing with each other and both disagreeing with the rule.**
 
 **The worst form is a restatement that has become an instruction.** A stale description waits to be
-read; a stale *requirement* recruits someone to act. Three of the eleven had crossed over: the §4 table
-told an implementer to release a watch that the design forbids releasing; the plan's open-items row
+read; a stale *requirement* recruits someone to act. Three of the eleven had crossed over: the §4
+table told an implementer to release a watch the design forbids releasing; the plan's open-items row
 filed two now-intended behaviours as defects to be fixed; the release gate asserted a property that
 had been deferred to a later increment, so it would go red on conforming behaviour and be "fixed" by
 weakening the test. **Ask of any restatement: if this is stale, does someone change the code?** If
