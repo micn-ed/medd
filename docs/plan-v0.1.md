@@ -207,7 +207,10 @@ This one is judged by eye, and that is correct.
 - Debounced autosave (~1s after typing stops), calling `document_write` with `expected_hash`.
 - Derived dirty state: `dirty === (currentText !== lastSyncedText)`. No stored flag.
 - `watcher.rs`: `notify` on the FSEvents backend. Recursive watch on the workspace root, plus the
-  parent directory of each open loose document. Coalesce raw events over ~100ms. Filter out
+  directory of each loose document opened this session — **not** *open* documents, and not a
+  narrowing set: a watch is not released when its tab closes (architecture.md §6, D-17). The same
+  two overstatements as the retired scope sentence, in a different sentence about the other half,
+  which is why sweeping for the scope wording never found it. Coalesce raw events over ~100ms. Filter out
   `.git/`, `node_modules/`, dotfile directories, and anything outside a watched scope.
 - Own-write suppression by content hash — the common case, and it must be cheap.
 - A genuine external change emits `document:changed-on-disk { path, content, hash }` with the
@@ -523,7 +526,7 @@ safe, and are therefore queued rather than blocking — but none of them ship br
 | ~~4b~~ | (original wording below) | A deleted file silently stops autosaving forever, with nothing on screen and no recovery — a recreated file comes back untracked. `git checkout` across branches does exactly this. |
 | 5 | Any read failure is reported as deletion | `EACCES`/`EIO`/`EMFILE` — the last most likely during the filesystem storms that generate watcher traffic — all latch a tab into finding 4's state. Only `NotFound` should mean removed. |
 | 6 | A non-UTF-8 external change is lossily converted, and the CAS lets medd write it back | `read()` refuses non-UTF-8 but `check_external_change` uses `from_utf8_lossy`, and the hash is of the raw bytes — so a later autosave passes CAS and writes replacement characters over the file's real content. **The line-ending fix now inherits this exposure:** detection in `read()` only ever sees valid UTF-8, but in `check_external_change` it runs on lossy output. A UTF-16LE document — an ordinary way for a `.md` to arrive from Windows — decodes to `\r\0\n\0` per break, so no `\r\n` is found, the lone-`\r` and lone-`\n` counts tie, a CRLF file is detected as LF, and the next write rewrites every line ending. 6's ruled fix closes this completely, since the content never reaches detection. |
-| — | `document_close` is specified in architecture.md §4 and does not exist | `last_known` grows for the session, loose-document watches are never released, and asset-protocol grants are never revoked. |
+| — | `document_close` is specified in architecture.md §4 and does not exist | `last_known` grows for the session. **That is the whole of it.** This row used to add "loose-document watches are never released, and asset-protocol grants are never revoked" — both of which D-17 and §6 make *intended behaviour*, listed here as defects. Whoever picked the row up would have "fixed" two things that are correct by design, and re-added the `forbid_directory` that `9c72059` removed. Evicting `last_known` is the entire job. |
 
 **Cmd+W quits medd, and quitting loses every pending edit.** Sequenced after the current fix
 batch, not into it, but ranked with the blockers rather than below them.

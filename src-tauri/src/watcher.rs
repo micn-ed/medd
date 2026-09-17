@@ -1,7 +1,9 @@
 //! `notify` wrapper, event coalescing, own-write suppression (architecture.md §6).
 //!
-//! What's watched: the workspace root, recursively, plus the parent directory of each open loose
-//! document (D-15), non-recursively. Raw events are coalesced over ~100ms by
+//! What's watched: the workspace root, recursively, plus the directory of each loose document
+//! opened this session (D-15), non-recursively. Not *open* documents — a watch is not released
+//! when its tab closes (architecture.md §6), so the set is bounded by distinct directories opened,
+//! not by what is on screen. Raw events are coalesced over ~100ms by
 //! `notify-debouncer-full` before anything else sees them, and delivered over an mpsc channel —
 //! the debouncer itself runs the underlying watcher on its own thread, so a filesystem event
 //! storm cannot block command handling. `run_event_loop` (main.rs's job to spawn) drains that

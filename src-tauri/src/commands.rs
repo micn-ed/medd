@@ -53,10 +53,18 @@ pub fn workspace_pick(app: tauri::AppHandle) -> Option<PathBuf> {
 
 /// Sets the workspace root, replacing whatever was open before.
 ///
-/// Scopes the asset protocol to the new root and revokes it from the old one (plan-v0.1.md §5):
-/// "nothing wider" means the allow-list should track the *current* workspace, not accumulate
-/// every workspace opened in a session. Starts watching the new root recursively (architecture.md
-/// §6) and stops watching the old one, for the same reason.
+/// Grants the asset protocol the new root, and **revokes nothing** — see `rescope_workspace`'s
+/// body for why, and D-17 for the decision. This comment used to say the opposite, and said it
+/// here, on the public command, while the explanation of the absence sits one call down in the
+/// helper. That ordering is a trap: reading top-down you meet a documented intent to revoke,
+/// find no revoke in the body, and conclude one was lost — so the obvious repair is to re-add
+/// `forbid_directory`, which is the defect (`9c72059`). **The scope accumulates every workspace
+/// root opened this session, by design and not by omission**, because `FsScope` has no revocation
+/// to offer; `asset_scope_revocation`'s two tests pin both halves.
+///
+/// Starts watching the new root recursively and stops watching the old one (architecture.md §6).
+/// The watch half genuinely *can* be released — `unwatch` is real, idempotent, and restores prior
+/// state — which is exactly why the two halves no longer share a lifecycle.
 #[tauri::command]
 pub fn workspace_open(
     app: AppHandle,
