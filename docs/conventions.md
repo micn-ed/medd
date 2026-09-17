@@ -811,6 +811,78 @@ architecture, because it is a fact about the platform and will still be true whe
 built. *"This module is still a stub"* belongs in status, because it is false the moment someone
 merges, **while still reading as current**.
 
+### A boundary is stated once and cited everywhere else
+
+The rule above aims at operational documents restating design documents, and it failed inside its
+own target. The asset scope is the worked example, and it is worth keeping because **every part of
+this entry was already written when it happened.**
+
+One boundary — which directories medd attends to, and for how long — was asserted in **eleven
+places across three documents and two source files**: architecture §6, §11 and the §4 IPC table;
+plan §5 twice, its watcher row, its open-items row, and increment 12's release gate; D-17's own
+statement of the bound; and doc comments on `workspace_open` and the watcher module. A decision
+retired it. The design document was corrected the same hour. **Nine of the eleven survived that
+correction**, and the last was found only by sweeping for the boundary rather than for any sentence.
+
+The count is the point. Nobody would defend eleven copies of a rule, and nobody chose eleven
+either: each was written by someone documenting the thing in front of them, in the words that thing
+suggested.
+
+**Restatement does not look like duplication when the words differ.** The eleven divided into three
+vocabularies sharing no phrase — readability (*"nothing else is readable by the WebView"*, *"nothing
+wider"*), watching (*"the parent directory of each open loose document"*, *"drop a loose-file
+watch"*), and revocation (*"revokes it from the old one"*, *"grants are never revoked"*). Every
+sweep was run in one vocabulary and blind to the other two. And a reader who finds sites from two of
+them reads two sources agreeing, not one source twice.
+
+Why the vocabularies existed is worth noticing: the boundary was two constraints — what may be read,
+and what is watched — welded together in the code, so each document described whichever half it
+cared about. **Unwelding them revealed that the eleven sites did not agree on which constraint they
+were stating.** A restatement can drift from its source; these had also drifted from each other.
+
+Neither a person nor `grep` can distinguish a restatement from an independent claim. That is the
+mechanism the earlier framing missed: the stale row is invisible not only because it is
+true-sounding and on-topic, but because **its vocabulary hides its parentage.**
+
+**The cost is authority, not staleness.** Staleness is the version where one document is wrong and
+gets corrected. Authority is the version where eleven sources assert one boundary and an implementer
+reads them as independent confirmations of something no longer true. Corroboration is how careful
+people check themselves, and restatements corroborate each other. Here two of them nearly
+reinstated a defect that had been fixed the same day — one carrying a plan reference, the other an
+architecture table row that an earlier review had independently filed as a missing feature. **Two
+documents agreeing with each other and both disagreeing with the rule.**
+
+**The worst form is a restatement that has become an instruction.** A stale description waits to be
+read; a stale *requirement* recruits someone to act. Three of the eleven had crossed over: the §4 table
+told an implementer to release a watch that the design forbids releasing; the plan's open-items row
+filed two now-intended behaviours as defects to be fixed; the release gate asserted a property that
+had been deferred to a later increment, so it would go red on conforming behaviour and be "fixed" by
+weakening the test. **Ask of any restatement: if this is stale, does someone change the code?** If
+so it is not documentation drift, it is a queued regression.
+
+**Position decides whether a stale claim reads as drift or as an omission.** The doc comment on
+`workspace_open` said it revoked the old root; the explanation of why it deliberately does not lived
+in the helper it calls. Read in the order anyone reads it, you meet a documented intent, find no
+implementation, and conclude the implementation was lost. **A correction placed downstream of the
+claim it corrects converts a completed fix into an apparent regression.** The explanation belongs
+where the wrong conclusion would be drawn, not where it is technically most accurate.
+
+So: **one document owns each boundary, and everywhere else cites it.** The owner is the document
+that would have to change if the boundary changed for a reason of its own — for a security
+boundary, the architecture section describing the mechanism. Everywhere else holds a pointer and
+the *why*, which is what an implementer needs in order to sequence work and is not a mechanism that
+can go stale. This extends the rule above past operational documents: **code comments are subject
+to it too**, and two of the nine survivors were comments.
+
+**And sweep for the boundary, not for the files you touched and not for the sentence you
+remember.** Checking the file you are about to edit tells you about that file. Grepping the phrase
+you wrote finds the restatements that share your vocabulary. Neither is the search a negative claim
+needs — see *A negative claim is only worth its search*, of which this is the documentation case.
+
+**This entry is deliberately an extension rather than a new one.** A second heading stating the
+same rule in fresh words is the exact failure described above, and it would have been the natural
+way to add it.
+
 ---
 
 ## Sharing a checkout
