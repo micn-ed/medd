@@ -802,6 +802,47 @@ mod tests {
             "an atomic replace must reload like any other external edit; got {events:?}"
         );
     }
+
+    #[test]
+    fn qa_covers_measured_rather_than_reasoned() {
+        // The leader flagged having reasoned this rather than measured it. Three cases, including
+        // the one that would silently reintroduce the bug being fixed: a stale entry left behind
+        // by unwatch would make `covers` answer true for a directory nothing watches any more, and
+        // the document there would never get its own watch.
+        use tempfile::Builder;
+        let root = Builder::new().prefix("medd-covers-").tempdir().unwrap();
+        let nested = root.path().join("sub");
+        std::fs::create_dir(&nested).unwrap();
+        let loose = Builder::new().prefix("medd-loose-").tempdir().unwrap();
+        let loose_sub = loose.path().join("deeper");
+        std::fs::create_dir(&loose_sub).unwrap();
+
+        let (mut w, _rx) = FsWatcher::new().unwrap();
+
+        // 1. A recursive root covers its subdirectories.
+        w.watch_recursive(root.path()).unwrap();
+        assert!(w.covers(root.path()), "the root itself");
+        assert!(w.covers(&nested), "a subdirectory of a RECURSIVE root is covered");
+
+        // 2. A non-recursive watch covers only its own directory.
+        w.watch_non_recursive(loose.path()).unwrap();
+        assert!(w.covers(loose.path()), "the watched directory itself");
+        assert!(
+            !w.covers(&loose_sub),
+            "a subdirectory of a NON-RECURSIVE watch must NOT count as covered, or a document \
+             there would never get a watch of its own"
+        );
+
+        // 3. Unwatching removes the bookkeeping, not just the OS watch. A stale entry here is the
+        //    same silent failure as the bug this replaced.
+        w.unwatch(root.path());
+        assert!(!w.covers(root.path()), "unwatched root must stop counting as covered");
+        assert!(
+            !w.covers(&nested),
+            "and so must everything under it -- a stale recursive root would swallow every \
+             document beneath a folder that is no longer watched"
+        );
+    }
 }
 
 #[cfg(test)]
