@@ -622,10 +622,33 @@ that asymmetry is noted now so the Linux port (N-4) treats it as a known diverge
 surprise.
 
 **What is watched:**
-- The workspace root, recursively — feeds `tree:changed` and picks up external edits to any open
-  document inside the root.
-- The parent directory of each open *loose* document (D-15), non-recursively, since those live
-  outside the root.
+- The **current** workspace root, recursively — feeds `tree:changed` and picks up external edits to
+  any open document inside the root. Switching workspaces unwatches the previous root; unlike the
+  asset scope (§11), a watch *can* be released, and this one is.
+- The directory of each document opened this session **whose path was outside everything already
+  watched when it was opened**, non-recursively.
+
+The second condition is deliberately about the *path and the current watch set*, not about whether
+a workspace happens to be open. Asking "is a workspace open and is this outside it" gives the same
+answer in every case a workspace exists and the wrong answer when none does — with no workspace,
+nothing is watched, so every document is outside it. The no-workspace case is the general case,
+not a special one; getting that backwards is what made a file opened with no folder open never
+watched at all.
+
+**These directory watches are never released**, and the bound on the set is *distinct directories
+of documents opened this session from outside the watch set* — small by construction under D-15,
+and in-workspace documents never enter it. Releasing on tab close is **refused**: `unwatch` is
+path-keyed and a directory can have more than one logical holder, so a release would have to be
+conditional on no remaining holder needing it, and getting that wrong costs P-3 — a Must — and
+fails silently. If the set ever stops being small the answer is a holder count, not an unwatch on
+close.
+
+**That refusal depends on something the frontend does**, and the dependency is recorded here
+because it is invisible from either side alone: `openWorkspace` calls `closeAllTabs()`, so a
+workspace switch cannot leave a document open inside the root it just unwatched. If tabs are ever
+made to survive a workspace switch — a reasonable feature to want — that switch's `unwatch` starts
+orphaning open documents, and external-change detection for them stops silently. Such a change
+must re-open this policy rather than assume it still holds.
 
 **Event handling:** raw events are coalesced over a ~100ms window and filtered before anything
 else happens — paths not under a watched scope are dropped, and `.git/`, `node_modules/`, and
@@ -870,8 +893,41 @@ in-document anchors scroll.
 
 **Image resolution (R-4).** Relative image paths resolve against **the document's own directory**,
 not the workspace root — which is what makes loose files (D-15) render correctly. The rewritten
-`src` uses Tauri's asset protocol, scoped to the workspace root and to the directories of open
-loose documents; nothing else is readable by the WebView.
+`src` uses Tauri's asset protocol.
+
+**The scope this protocol is given is monotonic (D-21), and this section used to claim otherwise.**
+It previously read *"scoped to the workspace root and to the directories of open loose documents;
+nothing else is readable by the WebView"* — which describes a boundary that tightens when a tab
+closes or a workspace changes. `FsScope` cannot express that: its four mutators all push onto
+monotonic pattern sets, nothing in the type removes from either, and a forbid is permanent and
+outranks every later grant. The missing counterpart was not an oversight anyone could have
+supplied. What is actually granted, stated so that no call site has to infer it:
+
+- **every workspace root opened this session, recursively** — grants are never released, so the
+  previous root stays readable after a switch. (`rescope_workspace` used to call
+  `forbid_directory` here. That is not a release; it is a permanent override that made returning
+  to a workspace leave its images unreadable for the rest of the process. It is gone, and
+  `asset_scope_revocation` pins the library property it relied on.)
+- **the directory of each loose document opened this session, non-recursively** — also never
+  released, so closing the tab does not narrow it.
+
+The **singular** "the workspace root" is the part most worth not repeating: a user who opens
+several projects over the days D-4 and I-3 expect medd to stay open has granted several recursive
+trees, not one.
+
+**What makes this acceptable is not that the scope is tight — it is not — but that it is not the
+only layer.** The CSP is `img-src 'self' asset: data:`, with no remote origin and no outward
+`connect-src`, so a file read through a wider-than-specified scope renders on screen and cannot
+leave the machine. This is a **local-read boundary wider than specified, not an exfiltration
+path**, and increment 5's two-layer framing is what makes the difference survivable — the first
+layer loose while the second holds. Neither layer substitutes for the other.
+
+**Only one design makes the old sentence true**, and D-21 records it as increment 12's to adopt
+rather than this build's: grant a stable root once and validate each path against the live
+open-document set before it reaches `asset:` — a check over current state *can* tighten, where a
+scope cannot. Under either design **the grant stays conditional**, because with no revocation a
+directory granted once is granted for the process lifetime, so *grant only what is needed* is the
+only control that exists.
 
 **Typography (R-7).** The preview stylesheet is the product, not decoration — D-3's reading mode
 exists because reading is the dominant use. Measure, vertical rhythm, heading scale, table
