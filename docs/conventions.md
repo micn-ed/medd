@@ -731,6 +731,33 @@ were omissions wearing the costume of constraints.
 
 ---
 
+## When something can't be tested, check its signature before blaming its location
+
+Three functions in `commands.rs` and `watcher.rs` had no tests, and the reason was identical in all
+three: each took a concrete `AppHandle`, which `mock_builder` cannot construct. `document_read`,
+`rescope_workspace`, `apply`. Making them generic over the runtime — `AppHandle<R>`, `R: Runtime` —
+made all three testable, and the tests then found a shipped defect and two wiring gaps.
+
+**The untested paths were not chosen. They were the ones no test could construct an argument for.**
+That is why they correlate so strongly with the defects: nobody weighed them up and skipped them,
+so nobody noticed the coverage was missing rather than declined.
+
+**The failure mode is a wrong diagnosis that ends the enquiry.** Twice we concluded a thing was
+untestable *where it lived* — "commands need a real Tauri app", "this is shell work and §2 says the
+seam is elsewhere" — when the accurate statement was **"this cannot be tested while it takes a
+concrete handle."** The first sounds like architecture and stops the conversation; the second is a
+signature change. One of the two had already been written into a QA criterion as an achievability
+limit, by someone who believed it when they wrote it.
+
+So: **when something resists testing, ask whether the obstacle is its signature before concluding
+it is its position.** Types, not layers, are the usual cause — a concrete handle, a borrowed
+argument the test cannot own, a struct whose constructor needs the world. Those are small changes
+that look like architectural ones from the outside.
+
+The tell is a testability claim phrased about a *place*: this module, this layer, above this
+boundary. A place cannot be tested; a function can, and the reason it can't is nearly always
+written in its parameters.
+
 ## A negative claim is only worth its search
 
 "No reversed lock order found", "no other instance of this bug", "nothing else depends on that" —
