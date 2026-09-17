@@ -456,9 +456,26 @@ Deliberately small. Everything else is internal to one side or the other.
 | `dir_list(path) -> Vec<TreeEntry>` | One level of the tree, lazily |
 | `document_read(path) -> { content, hash }` | Open a document; begins tracking it |
 | `document_write(path, content, expected_hash) -> Result<{hash}, Conflict>` | Autosave, compare-and-swap (§3) |
-| `document_close(path)` | Stop tracking; drop a loose-file watch |
+| `document_close(path)` | Stop tracking. **Releases nothing else** — see §6 and §11 |
 | `open_external(url)` | Hand an http(s) link to the system browser (R-6) |
 | `state_save(state)` | Persist session state, debounced (§7) |
+
+**`document_close` releases tracking and nothing else, and that is deliberate.** This row used to
+read *"stop tracking; drop a loose-file watch"*, and increment 7's review listed the missing watch
+release as one consequence of the command not existing yet. Both halves of that have since been
+ruled the other way:
+
+- **The watch stays.** `unwatch` is path-keyed and a directory can have more than one logical
+  holder, so a release would have to be conditional on no remaining holder needing it; getting that
+  wrong costs P-3 — a Must — and fails silently. §6 has the bound that makes keeping it affordable.
+- **The asset grant cannot be released at all** (D-17). `FsScope` has no removal API, and the one
+  call that looked like a release was a permanent override that broke returning to a workspace. §11
+  has the detail.
+
+So the eviction of the path's `last_known` entry is the *whole* job, and whoever implements this
+command should not add a second responsibility to it on the strength of the older wording. The
+drift that motivated it — `last_known` growing for the session — is real and is what this command
+fixes.
 
 **Events (Rust → frontend)**
 
