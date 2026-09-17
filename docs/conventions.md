@@ -824,6 +824,25 @@ merges, **while still reading as current**.
   you that one side is simply older — so the side that *adds* the feature, and therefore looks like
   the authoritative one, is also the side missing everything main learned in the meantime.
 
+  **Where it bites is narrower than it sounds, and knowing where is the useful part.** The
+  absences only produce a wrong result on lines *both* sides changed — a conflict, where resolving
+  it wrongly reverts main's fix. Where only main moved, a three-way merge takes main's side
+  cleanly and the absence costs nothing. So **"take theirs" is dangerous in the conflicting hunks
+  specifically, in proportion to how long the branch has been open** — not file-wide, and not
+  because the branch is hostile, but because a long-open branch has more lines main has since
+  moved. `workspace_pick` is exactly that shape: main changed the attribute, the branch holds the
+  old one, and both touch the same line.
+
+  **A two-way diff is not a merge, and reading one as though it predicts a merge is its own trap.**
+  `git diff main origin/<branch> -- <path>` against this very file reported **552 deletions**,
+  which reads as *the merge will delete `conventions.md`*. It will not. A two-way diff says what it
+  would take to turn main into the branch; a merge asks what each side did *since the base*. Here
+  the base and the branch are byte-identical (23,908) and only main moved (59,164), so the merge
+  keeps main's version without a conflict. That near-miss happened while writing this entry, by its
+  author, who had used the same command correctly one paragraph earlier for a different question —
+  which is the whole reason it is recorded: **the command is right and the inference from it is
+  not, and nothing about the output distinguishes the two.**
+
   `origin/medd-dev` forked before the folder-picker fix. On main, `workspace_pick` is
   `#[tauri::command(async)]` and a `command_shape` guard enforces that shape; on the branch it is
   plain `#[tauri::command]` and still calls `blocking_pick_folder`, and the guard does not exist.
@@ -892,6 +911,18 @@ merges, **while still reading as current**.
   And a teammate's all-clear does not substitute for the command. The architect nearly skipped the
   check *because* the leader had already given one — an assurance from someone who did not run it
   carries no more information than not asking.
+
+  **And checking the file you are about to edit tells you about that file.** That is the narrower
+  correction, and it matters because it is the step that feels like it finished the job. The
+  architect established that the other branch's hunks in `App.svelte` were ten lines clear of the
+  intended edit and concluded the branch would merge — true of `App.svelte`, and silent on
+  `commands.rs` and `main.rs`, which were not going to be touched and so had not been looked at.
+  The leader's own attempt to land the branch conflicted in exactly those two files.
+
+  So they are two questions and only one of them was asked: **"will my change merge?" is about the
+  files you edit; "will their branch merge?" is about every file the branch holds.** The first is
+  what the pathspec check answers, and answering it confidently is what makes the second easy to
+  stop asking.
 
 - **Work in a `git worktree`, not a shared checkout.** `git worktree add ../medd-<task>` gives a
   separate working directory on its own branch, sharing the same object store — so nothing is
