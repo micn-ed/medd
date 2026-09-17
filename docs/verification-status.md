@@ -1,7 +1,7 @@
 # Verification status
 
 **Owner:** QA
-**Accurate as of:** `c80b619` — 130 Rust tests, 137 frontend tests, all green; clippy `-D warnings`,
+**Accurate as of:** `6c44625` — 159 Rust tests, 143 frontend tests, all green; clippy `-D warnings`,
 `cargo fmt --check`, `svelte-check` clean.
 
 This document exists because **the test counts above are weaker evidence than they look**, and the
@@ -132,6 +132,11 @@ over-read.
 ## 3. Open items that already have a reproduction
 
 **Do not re-derive these.** Each has concrete values and a location.
+
+*Re-checked at `6c44625`: all three are still open. `box-sizing` is still absent from `src/`, the
+three `detached-recovery` characterisation tests are still green (which means the defect is still
+present), and the vacuous not-dirty test is still in `doc.test.ts`. Checked rather than carried
+forward — two items in an earlier revision of this list had been fixed without my noticing.*
 
 ### 3.1 Reading mode overflows its container by 104px — OPEN
 
