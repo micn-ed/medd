@@ -119,37 +119,6 @@ would restore that and is **refused** — it puts two questions back into one pi
 exactly the coupling that produced the sidebar bug. If the zero-toggle workflow is wanted back it
 needs its own decision about per-mode layout memory, not a quiet re-coupling of this one.
 
-**D-21 (2026-09-17): the asset scope is monotonic, and the specification moves to meet it.**
-
-Plan §5's *"nothing wider"* and architecture §11's *"nothing else is readable by the WebView"*
-describe a boundary that **tightens when a tab closes**. `FsScope` cannot express that: all four
-mutators push onto monotonic sets, nothing removes, and a forbid is permanent and outranks every
-later grant. **The missing counterpart is not an oversight anyone could have supplied** — the
-specification is unachievable with the mechanism named to implement it.
-
-**Chosen: relax the specification to what the mechanism holds.** The scope is the workspace root
-plus the directories of loose documents opened this session, monotonic, bounded by *distinct
-directories of loose documents opened this session* — small by construction under D-15, and
-in-workspace documents never enter it because the recursive root watch already covers them.
-
-**Rejected for now: stop using the scope as the gate** — grant a stable root once and validate each
-path against the live open-document set before it reaches `asset:`. A check over current state
-*can* tighten, so **only this route makes §11's sentence true.** It is the right answer and the
-wrong moment: it replaces a security gate, and doing that under field-bug pressure, in the same
-build as two user-facing fixes, is how a boundary gets changed without anyone reviewing the change
-as a boundary. **Recorded as what increment 12's audit should adopt if §11's sentence must hold.**
-
-**What makes the relaxed version acceptable is not that the scope is tight — it isn't — but that
-it is not the only layer.** The CSP is `img-src 'self' asset: data:` with no remote origin and no
-outward `connect-src`: a file read this way renders on screen and cannot leave the machine. This is
-a **local-read boundary wider than specified, not an exfiltration path**, and increment 5's
-two-layer framing is what makes the difference survivable — neither layer substitutes for the
-other, and this is the first being loose while the second holds.
-
-**The grant stays conditional under either route**, because an unconditional grant is unrepairable
-by construction: with no revocation, a directory granted once is granted for the process lifetime,
-so *"grant only what is needed"* is the only control that exists.
-
 **Rejected: multi-root workspaces.** VS Code-style multiple roots is real power, but it is
 scope the user did not ask for and complicates the tree, quick-open, and link resolution.
 
@@ -396,3 +365,49 @@ a thin vertical slice, and nothing about deferring it makes it harder later. It 
 candidate to promote once v0.3 lands.
 
 **Cost.** Long documents are navigated by scrolling until then.
+
+## D-17 — Asset scope lifetime: **monotonic, and the specification moves to meet it**
+
+Plan §5's *"nothing wider"* and architecture §11's *"nothing else is readable by the WebView"*
+describe a boundary that **tightens when a tab closes**. `FsScope` cannot express that: all four
+mutators push onto monotonic sets, nothing removes from either, and a forbid is permanent and
+outranks every later grant. **The missing counterpart was never an oversight anyone could have
+supplied** — the specification is unachievable with the mechanism named to implement it.
+
+**Chosen: relax the specification to what the mechanism holds**, and state the bound honestly.
+
+**The bound, both halves.** With `forbid_directory` correctly gone from `rescope_workspace`,
+nothing narrows the scope at any point, so the granted set is:
+
+- **every workspace root opened this session**, each granted recursively — *not* "the workspace
+  root"; there is no current-root narrowing and never was; and
+- the distinct **directories of loose documents** opened this session, small by construction under
+  D-15, with in-workspace documents never entering it.
+
+**The workspace half is the larger one and the easier to misstate.** A user who opens several
+projects across the days D-4 and I-3 expect medd to stay open has granted several recursive trees,
+and two or three can cover most of a home directory. An earlier draft of this entry said "the
+workspace root", singular — **which repeated in miniature the exact failure this decision exists to
+end: a document claiming a tightness the mechanism does not hold.**
+
+**Rejected for now: stop using the scope as the gate** — grant a stable root once and validate each
+path against the live open-document set before it reaches `asset:`. A check over current state
+*can* tighten, so **only this route makes §11's sentence true.** It is the right answer and the
+wrong moment: it replaces a security gate, and doing that under field-bug pressure in the same
+build as two user-facing fixes is how a boundary gets changed without anyone reviewing the change
+*as* a boundary. **Recorded as what increment 12's audit should adopt if §11's sentence must hold.**
+
+**What makes the relaxed version acceptable is not that the scope is tight — it is not — but that
+it is not the only layer.** The CSP is `img-src 'self' asset: data:`, with no remote origin and no
+outward `connect-src`: a file read this way renders on screen and cannot leave the machine. This is
+a **local-read boundary wider than specified, not an exfiltration path**, and increment 5's
+two-layer framing is what makes the difference survivable — neither layer substitutes for the
+other, and this is the first being loose while the second holds.
+
+**The grant stays conditional under either route**, because an unconditional grant is unrepairable
+by construction: with no revocation, a directory granted once is granted for the process lifetime,
+so *"grant only what is needed"* is the only control that exists.
+
+**Cost.** Read access accumulates for the life of the process, and only a restart returns it. The
+CSP is what stands between that and a leak, which puts more weight on increment 5's second layer
+than a tight scope would.
