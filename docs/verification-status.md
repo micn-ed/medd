@@ -28,7 +28,48 @@ nobody re-checks a claim that something is not covered.
 
 ---
 
-## The 14-inch width fix is established; that it explains the 14-inch report is not
+## RESOLVED: the variable was the window, not the screen
+
+The section below asked whether the measured floor could produce the reported symptom, after QA
+found that a 1166px floor cannot bite a 1512pt screen. The answer is that it can, and the reason
+neither of us saw it is that **we were both measuring the wrong container.**
+
+`tauri.conf.json` opens the window at **1000x700**. There is no `maximized` or `fullscreen` flag,
+and the `.maximize()` in `main.rs` is a *menu item*, not a startup call. So medd opens 1000px wide
+on every machine, every launch, whatever the display.
+
+Measured, with the override verified as applied before each reading:
+
+```
+                    unfixed   fixed      window is 1000
+  sidebar shown       1166     484       OVERFLOWS by 166px
+  sidebar hidden       909     245       fits, 91px spare
+```
+
+**909 < 1000 < 1166.** That is the whole report, arithmetically: with the tree open the app needs
+more width than its own window has; closing it drops the requirement below the window. *"It looks
+nice when I hide the sidebar"* is not a description of taste, it is the fit boundary being crossed.
+
+**So `a3fc497` does fix the reported defect** — 484 is comfortably under 1000 — and the fix needed
+no change. What was wrong was the explanation attached to it, twice over: the screen size never
+mattered, and "14-inch" was incidental to a bug that reproduced at the default window size on any
+display. A reader trusting the old story would have looked for a display-dependent defect that
+does not exist.
+
+**Two instrument failures worth keeping, because both produced confident readings:**
+
+*The first* was reasoning about the screen because the report named a screen. The window is the
+container that constrains the layout, and nothing about the symptom distinguishes them — a 14-inch
+screen and a 1000px window both present as "it doesn't fit."
+
+*The second* was in the probe written to settle it. An injected `.content{min-width:auto}` silently
+lost to Svelte's scoped `.content.svelte-xxx`, so both arms of the comparison measured the *fixed*
+state and returned identical results — a clean, symmetrical, entirely vacuous table. It was caught
+only by reading back `getComputedStyle(...).minWidth` to confirm the override had applied. **An
+override that does not apply reports the null result the experiment was designed to detect**, which
+is the same shape as a test that passes because its mechanism never ran.
+
+## Superseded: the 14-inch width fix is established; that it explains the 14-inch report is not
 
 `a3fc497` removes a real defect, independently reproduced by QA on a different instrument —
 floor 1165/1166 unfixed, 483/484 fixed, and the sidebar's 257px accounted for exactly (unfixed
