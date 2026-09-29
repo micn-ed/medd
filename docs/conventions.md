@@ -1193,3 +1193,31 @@ add it.
   what makes it structural rather than careless. So: **when recording that something is missing,
   record how you know and what you checked**, because "absent from the tree" is a fact about the
   tree, and the reader needs a fact about the work.
+
+- **A green suite says nothing about the gate standing next to it.** `cargo fmt --check` failed on
+  `main` for twelve days, on one line of one test. Nothing reported it. 159 passing tests, clean
+  clippy, and a tidy `git status` made the project look correct from every angle anyone was
+  actually looking from — because the suite and the gate are different instruments and only one of
+  them was being run.
+
+  It surfaced by **re-checking a state I had left rather than trusting it**, after a long gap. The
+  same move found two already-fixed items in this document's own open-items list. A thing you
+  verified once and stopped watching is not a verified thing; it is a thing that was true when you
+  looked.
+
+  **The uncomfortable part.** The argument that should have caught this was made *the same day* —
+  *a gate known to fail is a gate nobody reads* — while clearing unrelated rustfmt drift. Mine went
+  red underneath that argument within hours of it being written. The argument was right; it did not
+  protect the thing it was about, because it was applied as a fix to the instance in front of
+  someone and left nothing watching afterwards. **An argument for why a gate matters is not a
+  mechanism for noticing when it stops passing.**
+
+  **And checking a gate has its own version of the trap.** The first attempt to confirm this
+  failure *passed*, because `cargo fmt --check` runs against the working tree — which held the
+  uncommitted fix. The gate is about what is committed. Measuring the copy that has the fix in it
+  is the same error as the instrument that silently did nothing, one step further out: the
+  measurement was real, the subject was wrong.
+
+  So: **verify a gate against committed state, not against your checkout** — `git show <ref>:<path>`
+  piped through the formatter, or the same check run in a clean worktree. And if a gate is worth
+  arguing for, it is worth running somewhere nobody has to remember.
