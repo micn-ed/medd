@@ -665,6 +665,9 @@ mod wire_format {
             json.contains(r#""relativePath":"notes/a.md""#),
             "match.ts reads entry.relativePath: {json}"
         );
-        assert!(json.contains(r#""path":"#), "match.ts reads entry.path: {json}");
+        assert!(
+            json.contains(r#""path":"#),
+            "match.ts reads entry.path: {json}"
+        );
     }
 }
